@@ -484,6 +484,29 @@ def preview_dir_size() -> int:
                     pass
     return total
 
+def add_file_asset(path: str):
+    """把磁盘上的单个文件补进素材库（收藏库外文件时用），成功返回它的 id。
+
+    字段尽量和扫描器一致，这样缩略图 / 打开 / 预览都走同一套逻辑。
+    """
+    p = fsops.norm(path)
+    if not os.path.isfile(p):
+        return None
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    base = os.path.basename(p)
+    name = textutil.display_name(base, [], fallback=os.path.splitext(base)[0])
+    db.ex("INSERT OR IGNORE INTO assets(kind,name,ext,orig_name,source_type,source_path,inner_path,"
+          "origin,folder,group_key,cover_key,size,mtime,category,style,tags,added_at,thumb_status) "
+          "VALUES(?,?,?,?,'file',?,'','','','','',?,?,'',?,'',?, 'pending')",
+          (config.kind_of(base), name, os.path.splitext(base)[1].lower(), base, p,
+           int(st.st_size), st.st_mtime, textutil.detect_style(name, "", base), time.time()))
+    row = db.q("SELECT id FROM assets WHERE source_path=? AND inner_path=''", (p,), one=True)
+    return row["id"] if row else None
+
+
 # ----------------------------------------------------------------- 缓存统计
 # 缓存目录（清掉之后程序会自动重建）
 CACHE_ITEMS = (

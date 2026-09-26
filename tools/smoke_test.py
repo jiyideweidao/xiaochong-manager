@@ -126,7 +126,12 @@ for e_ in (".psd", ".skp", ".dwg", ".jpg"):
     d = get("/api/assoc?ext=" + e_)
     print("  系统默认 %-6s %s" % (e_, d.get("exe") or "(查不到)"))
 # 临时配一条 .tif 规则（素材库里那条 psd 素材实际是 .tif），验证规则被真正用上
-post("/api/settings", {"open_with": {".tif": r"C:\Windows\System32\notepad.exe"}})
+# 先记下你原来的「每个扩展名用哪个程序」，跑完原样还回去，绝不覆盖你自己的设置
+# /api/state 读出来的是 [{ext,exe,ok}] 列表，先转成 {扩展名: 程序} 记下来
+_ow_before = {r["ext"]: r["exe"] for r in (get("/api/state").get("open_with") or [])}
+_ow_test = dict(_ow_before)
+_ow_test[".tif"] = r"C:\Windows\System32\notepad.exe"
+post("/api/settings", {"open_with": _ow_test})
 print("open_with 规则:", get("/api/state")["open_with"])
 psd = get("/api/assets?kind=psd&limit=3")["items"]
 if psd:
@@ -231,7 +236,8 @@ async def main():
         await js("document.querySelector('#btnSettings').click()"); await asyncio.sleep(1.5)
         await shot("final_04_settings.png")
 asyncio.run(main())
-post("/api/settings", {"open_with": {}})
-print("open_with 已复位:", get("/api/state")["open_with"])
+post("/api/settings", {"open_with": _ow_before})
+_now = {r["ext"]: r["exe"] for r in (get("/api/state")["open_with"] or [])}
+print("open_with 已复位:", _now, "(和跑之前一致)" if _now == _ow_before else "!! 没复位成功")
 edge.kill()
 print("shots ->", OUT)

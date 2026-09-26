@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS assets (
   style TEXT DEFAULT '',
   tags TEXT DEFAULT '',
   favorite INTEGER DEFAULT 0,
+  fav_at REAL DEFAULT 0,
   render_id INTEGER DEFAULT 0,
   thumb_key TEXT DEFAULT '',
   thumb_status TEXT DEFAULT 'pending',
@@ -81,6 +82,21 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 
+# 给老库补新列：CREATE TABLE IF NOT EXISTS 不会给已存在的表加字段
+_MIGRATIONS = (("assets", "fav_at", "REAL DEFAULT 0"),)
+
+
+def _migrate(c) -> None:
+    """给老版本的库补上新加的列 / 索引（补完照样能用，不会丢数据）。"""
+    for table, col, decl in _MIGRATIONS:
+        cols = [r[1] for r in c.execute("PRAGMA table_info(%s)" % table)]
+        if col not in cols:
+            c.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, col, decl))
+    # 索引必须等列补齐之后再建，否则老库会报 "no such column: fav_at"
+    c.execute("CREATE INDEX IF NOT EXISTS idx_assets_fav_at ON assets(fav_at)")
+    c.commit()
+
+
 def conn() -> sqlite3.Connection:
     c = getattr(_local, "c", None)
     if c is None:
@@ -90,6 +106,7 @@ def conn() -> sqlite3.Connection:
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA synchronous=NORMAL")
         c.executescript(SCHEMA)
+        _migrate(c)
         c.commit()
         _local.c = c
     return c

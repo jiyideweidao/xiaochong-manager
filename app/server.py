@@ -152,7 +152,8 @@ def api_facets():
 SORTS = {"name": "name COLLATE NOCASE ASC", "name_desc": "name COLLATE NOCASE DESC",
          "size": "size DESC", "size_asc": "size ASC", "new": "mtime DESC",
          "old": "mtime ASC", "category": "category COLLATE NOCASE ASC, name ASC",
-         "kind": "kind ASC, name COLLATE NOCASE ASC", "random": "RANDOM()"}
+         "kind": "kind ASC, name COLLATE NOCASE ASC", "random": "RANDOM()",
+         "fav": "favorite DESC, fav_at DESC, name COLLATE NOCASE ASC"}
 
 
 @app.get("/api/assets")
@@ -580,11 +581,43 @@ def api_rename_history():
 
 @app.post("/api/favorite")
 def api_favorite(payload: dict = Body(...)):
-    ids = payload.get("ids") or []
+    """收藏 / 取消收藏。三种写法都支持：
+      ids    素材库条目的 id 列表
+      path   一个磁盘文件路径（收藏「浏览文件」里看到的文件）
+      paths  多个磁盘文件路径
+    库里还没有的文件会先补进索引，这样缩略图和「我的收藏」里都能看到。
+    收藏时会记下收藏时间（fav_at），方便按收藏时间排序。
+    """
     val = 1 if payload.get("value", True) else 0
+    ids = []
+    for x in (payload.get("ids") or []):
+        try:
+            ids.append(int(x))
+        except (TypeError, ValueError):
+            pass
+    paths = [p for p in (payload.get("paths") or []) if p]
+    if payload.get("path"):
+        paths.append(payload["path"])
+    missed = 0
+    for p in paths:
+        aid = ops.add_file_asset(p)
+        if aid:
+            ids.append(aid)
+        else:
+            missed += 1
+    ids = sorted({i for i in ids if i})
+    state = {}
     if ids:
-        db.ex(f"UPDATE assets SET favorite=? WHERE id IN ({','.join('?'*len(ids))})", (val, *ids))
-    return {"ok": len(ids), "value": val}
+        ph = ",".join("?" * len(ids))
+        if val:
+            db.ex("UPDATE assets SET favorite=1, "
+                  "fav_at=CASE WHEN favorite=0 OR fav_at=0 THEN ? ELSE fav_at END "
+                  "WHERE id IN (%s)" % ph, (time.time(), *ids))
+        else:
+            db.ex("UPDATE assets SET favorite=0, fav_at=0 WHERE id IN (%s)" % ph, tuple(ids))
+        for r in db.q("SELECT id,favorite FROM assets WHERE id IN (%s)" % ph, tuple(ids)):
+            state[str(r["id"])] = r["favorite"]
+    return {"ok": len(ids), "value": val, "ids": ids, "state": state, "missed": missed}
 
 
 @app.post("/api/open")
@@ -795,6 +828,23 @@ def api_places():
             "roots": [p for p in all_roots()]}
 
 
+def _mark_favorites(files) -> None:
+    """给「浏览文件」列出来的文件补上 favorite / asset_id，用来显示收藏星标。"""
+    paths = [e.get("path") for e in files if e.get("path")]
+    fav = {}
+    step = 800
+    for i in range(0, len(paths), step):
+        chunk = paths[i:i + step]
+        ph = ",".join("?" * len(chunk))
+        for r in db.q("SELECT id,source_path FROM assets WHERE inner_path='' "
+                      "AND favorite=1 AND source_path IN (%s)" % ph, tuple(chunk)):
+            fav[r["source_path"]] = r["id"]
+    for e in files:
+        aid = fav.get(e.get("path"))
+        e["favorite"] = 1 if aid else 0
+        e["asset_id"] = aid or 0
+
+
 @app.get("/api/browse")
 def api_browse(path: str = "", hidden: int = 0, limit: int = Query(4000, le=20000)):
     p = fsops.norm(path) if path else ""
@@ -808,6 +858,7 @@ def api_browse(path: str = "", hidden: int = 0, limit: int = Query(4000, le=2000
         e["preview"] = "folder"
     for e in data["files"]:
         e["preview"] = preview_kind(e["name"], e["kind"])
+    _mark_favorites(data["files"])
     return data
 
 

@@ -303,7 +303,7 @@ function libItem(a) {
     size: a.size || 0, mtime: a.mtime || 0, is_dir: false, preview: a.preview || "none",
     thumb: "/api/thumb/" + a.id, raw: "/api/raw?id=" + a.id, text: "/api/text?id=" + a.id,
     source_path: a.source_path, inner: a.inner_path || "", category: a.category || "",
-    style: a.style || "", favorite: a.favorite || 0, render_id: a.render_id || 0,
+    style: a.style || "", favorite: a.favorite || 0, fav_at: a.fav_at || 0, render_id: a.render_id || 0,
     origin: a.origin || "", filename: (a.name || "") + (a.ext || ""), from: "lib",
     renderThumb: a.render_id ? "/api/thumb/" + a.render_id + "?size=1400&render=0" : "",
   };
@@ -316,6 +316,7 @@ function fileItem(e) {
     preview: e.is_dir ? "folder" : (e.preview || "none"),
     thumb: e.is_dir ? "" : "/api/thumb-path?" + q, raw: "/api/raw?" + q, text: "/api/text?" + q,
     path: e.path, source_path: e.path, inner: "", filename: e.name, from: "fs",
+    favorite: e.favorite || 0, asset_id: e.asset_id || 0,
   };
 }
 
@@ -326,14 +327,16 @@ function cardHtml(it) {
   const thumb = it.is_dir
     ? `<div class="thumb ${it.kind === "drive" ? "drive" : "folder"}"><span class="fi">${it.kind === "drive" ? "💽" : "📁"}</span></div>`
     : `<div class="thumb"><img src="${it.thumb}" loading="lazy" onload="this.dataset.ok='1'" onerror="this.remove()" alt=""><span class="ph">${esc(kindLabel(it.kind))}</span>
-        ${["image", "psd", "model"].includes(it.kind) ? "" : `<span class="kindtag">${esc(kindLabel(it.kind))}</span>`}</div>`;
+        ${["image", "psd", "model"].includes(it.kind) ? "" : `<span class="kindtag">${esc(kindLabel(it.kind))}</span>`}${badge}</div>`;
+  const favBtn = it.is_dir ? ""
+    : `<button class="favbtn${it.favorite ? " fav-on" : ""}" data-fav="1" title="${it.favorite ? "取消收藏" : "收藏到我的收藏"}">${it.favorite ? "★" : "☆"}</button>`;
   const sub = it.from === "lib"
     ? `${it.category ? `<span class="c">${esc(it.category)}</span>` : ""}<span class="o" title="${esc(it.origin || "")}">${esc(it.origin || it.folder || "")}</span>`
     : `${it.is_dir ? `<span class="c">文件夹</span>` : `<span class="c">${esc(fmtSize(it.size))}</span>`}<span class="o">${esc(fmtTime(it.mtime))}</span>`;
   const quick = `<div class="quick"><button data-q="open">打开</button><button data-q="reveal">定位</button>
       <button data-q="export">复制到…</button>${it.is_dir ? "" : `<button data-q="copy">复制</button>`}</div>`;
   return `<div class="card${on}" data-key="${esc(it.key)}">
-    ${thumb}${badge}${it.favorite ? `<span class="fav">★</span>` : ""}${it.kind === "model" ? `<span class="tag3d">3D</span>` : ""}
+    ${thumb}${favBtn}${it.kind === "model" ? `<span class="tag3d">3D</span>` : ""}
     <div class="meta"><div class="name" title="${esc(it.name)}">${esc(it.name)}</div><div class="sub">${sub}</div></div>
     ${quick}</div>`;
 }
@@ -356,6 +359,8 @@ function bindCards(scope = "#grid") {
       } else { S.sel.clear(); S.sel.add(key); S.map[key] = it; S.lastIndex = i; }
       syncSel(); openDrawer(it);
     };
+    const fb = c.querySelector(".favbtn");
+    if (fb) fb.onclick = e => { e.stopPropagation(); toggleFav(it2(key), fb); };
     c.ondblclick = e => { if (!e.target.dataset.q) quickAct(it2(key).is_dir ? "enter" : "open", it2(key)); };
   });
 }
@@ -367,6 +372,40 @@ function syncSel() {
   renderSelActs();
 }
 function selItems() { return [...S.sel].map(it2).filter(Boolean); }
+
+/* ---------------- 收藏 ---------------- */
+async function toggleFav(it, btn) {
+  if (!it || it.is_dir) return;
+  const val = it.favorite ? 0 : 1;
+  const body = it.from === "lib" ? { ids: [it.id], value: val }
+                                 : { paths: [it.path || it.source_path], value: val };
+  let r;
+  try { r = await api("/api/favorite", body); }
+  catch (e) { return toast("收藏失败：" + e.message, "err", 7000); }
+  if (!r.ok) return toast("这一项收藏不了（文件夹不能收藏，或所在位置没有权限）", "warn", 7000);
+  const aid = (r.ids && r.ids[0]) || it.id || 0;
+  it.favorite = val;
+  it.fav_at = val ? (it.fav_at || Date.now() / 1000) : 0;
+  if (aid) it.id = aid;
+  if (btn) {
+    btn.classList.toggle("fav-on", !!val);
+    btn.textContent = val ? "★" : "☆";
+    btn.title = val ? "取消收藏" : "收藏到我的收藏";
+  }
+  const db2 = $('#dBody [data-d="fav"]');
+  if (db2 && S.cur && S.cur.key === it.key) db2.textContent = val ? "★ 取消收藏" : "☆ 收藏";
+  refreshFavCount();
+  toast(val ? `已加入我的收藏：${it.name}` : `已从我的收藏移除：${it.name}`, "ok", 2600);
+  if (!val && S.mode === "lib" && S.kind === "fav") {   // 在收藏夹里取消收藏，这张卡就该消失
+    S.sel.delete(it.key); delete S.map[it.key]; syncSel(); reload();
+  }
+  return r;
+}
+async function refreshFavCount() {
+  try { await loadState(); } catch (e) { return; }   // 顺便把左下角那行统计也刷新
+  const b = $('#kinds button[data-kind="fav"] .n');
+  if (b) b.textContent = S.st.favorites || 0;
+}
 
 /* ---------------- 素材库列表 ---------------- */
 function params() {
@@ -538,6 +577,7 @@ function drawerActs(it) {
     a.push(["rename", "重命名…", "ghost"]);
     if (!it.is_dir) a.push(["zip", "压缩为 zip", "ghost"]);
     if (it.kind === "archive") a.push(["extract", "解压到…", "ghost"]);
+    if (!it.is_dir) a.push(["fav", it.favorite ? "★ 取消收藏" : "☆ 收藏", "ghost"]);
     a.push(["recycle", "删除到回收站", "ghost"]);
   }
   a.push(["copyfull", "复制完整路径", "ghost"]);
@@ -670,7 +710,7 @@ window.addEventListener("beforeunload", () => { try { stop3D(); } catch (e) {} }
 const LIB_ACTS = [
   ["open", "打开", "primary"], ["openas", "打开方式", ""], ["reveal", "定位", ""],
   ["export", "复制到文件夹…", ""], ["copy", "复制", ""], ["cut", "剪切", ""],
-  ["fav", "收藏", "ghost"], ["favoff", "取消收藏", "ghost"], ["rename", "批量重命名", "ghost"],
+  ["fav", "☆ 收藏", "ghost"], ["rename", "批量重命名", "ghost"],
   ["extract", "解压", "ghost"], ["copyfull", "复制路径", "ghost"],
 ];
 const FS_ACTS = [
@@ -680,9 +720,14 @@ const FS_ACTS = [
   ["rename", "重命名", "ghost"], ["zip", "压缩为 zip", "ghost"], ["extract", "解压", "ghost"],
   ["recycle", "删除到回收站", "ghost"], ["newfolder", "新建文件夹", "ghost"], ["copyfull", "复制路径", "ghost"],
 ];
+function actLabel(a, l) {          // 「收藏」按钮跟着选中项状态变文案
+  if (a !== "fav") return l;
+  const items = selItems();
+  return items.length && items.every(x => x.favorite) ? "★ 取消收藏" : "☆ 收藏";
+}
 function renderSelActs() {
   const list = S.mode === "lib" ? LIB_ACTS : FS_ACTS;
-  $("#selacts").innerHTML = list.map(([a, l, c]) => `<button class="btn ${c}" data-act="${a}">${esc(l)}</button>`).join("");
+  $("#selacts").innerHTML = list.map(([a, l, c]) => `<button class="btn ${c}" data-act="${a}">${esc(actLabel(a, l))}</button>`).join("");
   $$("#selacts button").forEach(b => b.onclick = () => doAct(b.dataset.act));
 }
 async function quickAct(act, it) {
@@ -760,10 +805,48 @@ async function doAct(act, one) {
       return;
     }
     if (act === "fav" || act === "favoff") {
-      if (!ids.length) return toast("请选择素材库里的素材", "warn");
-      await api("/api/favorite", { ids, value: act === "fav" });
-      toast(act === "fav" ? `已收藏 ${ids.length} 项` : `已取消收藏 ${ids.length} 项`, "ok");
-      if (S.mode === "lib") reload(); else renderBrowse();
+      const sel = items.filter(x => !x.is_dir);
+      if (!sel.length) return toast("先选中要收藏的文件（文件夹不能收藏）", "warn");
+      const allFav = sel.every(x => x.favorite);
+      const val = act === "favoff" ? 0 : (allFav ? 0 : 1);
+      const body = { value: val };
+      const lids = sel.filter(x => x.from === "lib").map(x => x.id);
+      const fps = sel.filter(x => x.from === "fs").map(x => x.path || x.source_path);
+      if (lids.length) body.ids = lids;
+      if (fps.length) body.paths = fps;
+      let r;
+      try { r = await api("/api/favorite", body); }
+      catch (e) { return toast("收藏失败：" + e.message, "err", 7000); }
+      if (!r.ok) return toast("收藏失败：这些项目可能没有权限", "err", 7000);
+      const keys = new Set(sel.map(x => x.key));
+      const pset = new Set(sel.map(x => (x.path || "").toLowerCase()));
+      [S.items, S.dirItems].forEach(L => L.forEach(y => { if (keys.has(y.key)) y.favorite = val; }));
+      ((S.dirData || {}).files || []).forEach(f => {
+        if (pset.has((f.path || "").toLowerCase())) f.favorite = val;
+      });
+      const miss = r.missed || 0;
+      toast(val ? `已收藏 ${r.ok} 项${miss ? `（${miss} 项没能收藏）` : ""}`
+                : `已取消收藏 ${r.ok} 项`, "ok");
+      refreshFavCount();
+      if (S.cur && sel.some(x => x.key === S.cur.key)) {
+        const db2 = $('#dBody [data-d="fav"]');
+        if (db2) db2.textContent = val ? "★ 取消收藏" : "☆ 收藏";
+      }
+      if (S.mode === "lib") {
+        if (!val && S.kind === "fav") { S.sel.clear(); S.map = {}; S.cur = null; reload(); }
+        else {
+          // 就地更新星星，不刷新整页：不跳滚动条、选中状态也不丢（可以再按 F 取消）
+          $$("#grid .card").forEach(c => {
+            if (!keys.has(c.dataset.key)) return;
+            const b = c.querySelector(".favbtn");
+            if (!b) return;
+            b.classList.toggle("fav-on", !!val);
+            b.textContent = val ? "★" : "☆";
+            b.title = val ? "取消收藏" : "收藏到我的收藏";
+          });
+          syncSel();
+        }
+      } else renderBrowse();
       return;
     }
     if (act === "rename") {
@@ -1616,6 +1699,9 @@ window.addEventListener("keydown", e => {
   }
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && !inInput) { e.preventDefault(); selectAll(); return; }
   if (inInput) return;
+  if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault(); doAct("fav"); return;
+  }
   if (S.mode === "browse") {
     if (e.key === "Delete") { e.preventDefault(); doAct("recycle"); }
     else if (e.key === "F2") { e.preventDefault(); doAct("rename"); }

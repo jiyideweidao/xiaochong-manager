@@ -31,7 +31,7 @@ DIST = os.path.join(HERE, "dist")
 EXTRA = os.path.join(HERE, "extra")
 OUTPUT_DIR = os.environ.get("XC_OUT") or os.path.join(HERE, "安装包")
 APP_NAME = "小虫管理器"
-APP_VER = "1.1.6"
+APP_VER = "1.1.7"
 def _find_iscc() -> str:
     """找 Inno Setup 6 的编译器（装在哪都可能）。"""
     for p in (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
@@ -67,6 +67,10 @@ README = """小虫管理器 %s —— 使用说明
     · 缩略图      图片、PSD、SketchUp、CAD、PDF、视频、音频、字体、文本、代码 都能预览
     · 3D 看图     选中 .skp，详情里直接转着看（线框 / 包围盒 / 真实尺寸），不打开 SketchUp
     · 分类        点左侧任一分类标签 = 只看这一组的模型，卡片带缩略图，点开即可 3D 预览
+    · 收藏        卡片右上角的 ☆ 点一下就收藏（变成金色 ★），再点一下取消；
+                  左侧「我的收藏」一键只看收藏过的文件，还能按「收藏时间」排序；
+                  选中多个后按 F 键（或点「☆ 收藏」）批量收藏
+                  「浏览文件」里看中的文件也能收藏，会自动补进素材库索引
     · 打开        双击 = 用合适的程序打开；每种格式都可以单独指定程序（见下面）
                   「打开方式」= 临时换一个程序打开
                   打开后右下角会写清「用了哪个程序」，程序窗口会自动提到最前
