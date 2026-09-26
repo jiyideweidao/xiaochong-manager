@@ -922,15 +922,45 @@ def api_fs_stats(payload: dict = Body(...)):
 
 
 # ------------------------------------------------------------------ 维护
+def _mb_text(n: float) -> str:
+    if n < 1024:
+        return "%d B" % n
+    if n < 1048576:
+        return "%.0f KB" % (n / 1024.0)
+    mb = n / 1048576.0
+    return ("%.0f MB" % mb) if mb < 1024 else ("%.2f GB" % (mb / 1024.0))
+
+
+@app.get("/api/cache/detail")
+def api_cache_detail(fresh: int = 0):
+    """缓存明细：按分类 / 类型 / 新旧分好组，给「自己挑着清」用。"""
+    return ops.cache_detail(force=bool(fresh))
+
+
 @app.post("/api/cleanup")
 def api_cleanup(payload: dict = Body(default={})):
-    """清理缓存释放磁盘空间。nested 清掉后需要重新扫描才会恢复。"""
+    """清理缓存释放磁盘空间。
+
+    带 items 的走「挑着清」：items 就是 /api/cache/detail 里每个分组的 sel 字段。
+    只带 what 的是老的一键清法，留给旧界面 / 脚本用。
+    nested 清掉后需要重新扫描素材库才会恢复。
+    """
+    items = payload.get("items")
+    if items is not None:
+        if not items:
+            return {"ok": True, "freed": 0, "done": [], "msg": "没有勾选任何项目，什么都没清"}
+        r = ops.cleanup_cache(items)
+        ops.cache_stats(force=True)
+        what = "、".join(r["done"]) or "所选项"
+        return {"ok": True, "freed": r["freed"], "done": r["done"],
+                "msg": "已清理 %s，释放 %s" % (what, _mb_text(r["freed"]))}
     import shutil as _sh
     what = payload.get("what") or "thumbs"
     freed = 0
     targets = {"thumbs": [config.THUMB_DIR], "nested": [config.NESTED_DIR],
-               "stage": [config.STAGE_DIR],
-               "all": [config.THUMB_DIR, config.NESTED_DIR, config.STAGE_DIR]}
+               "stage": [config.STAGE_DIR], "model3d": [config.MODEL3D_DIR],
+               "all": [config.THUMB_DIR, config.NESTED_DIR, config.STAGE_DIR,
+                       config.MODEL3D_DIR]}
     for d in targets.get(what, []):
         if not os.path.isdir(d):
             continue
@@ -949,7 +979,7 @@ def api_cleanup(payload: dict = Body(default={})):
         db.ex("UPDATE assets SET thumb_status='pending', thumb_key=''")
     ops.invalidate_cache_stats()
     ops.cache_stats(force=True)
-    return {"ok": True, "freed": freed, "msg": f"已释放 {freed / 1048576:.0f} MB"}
+    return {"ok": True, "freed": freed, "msg": "已释放 " + _mb_text(freed)}
 
 
 @app.post("/api/shutdown")

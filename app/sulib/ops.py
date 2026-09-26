@@ -556,3 +556,335 @@ def invalidate_cache_stats():
     """清理之后让体积重新统计一次。"""
     with _CACHE_LOCK:
         _CACHE["at"] = 0.0
+    with _DETAIL_LOCK:
+        _DETAIL["at"] = 0.0
+
+
+# ------------------------------------- 缓存明细（可以按分类 / 类型挑着清）
+# 明细里每一条都带一个 sel（选择器），前端原样回传就能精确清理，不用重写规则。
+_DETAIL = {"data": None, "at": 0.0}
+_DETAIL_TTL = 120.0
+_DETAIL_LOCK = threading.RLock()
+_NEST_KEY_RE = re.compile(r"^[0-9a-f]{16}$")
+_NEST_MARK = os.sep + "nested" + os.sep
+_AGE_ORDER = ("today", "week", "month", "old")
+_AGE_LABEL = {"today": "今天用过的", "week": "最近 7 天用过的",
+              "month": "最近一个月用过的", "old": "一个月以前用过的"}
+
+
+def _age_key(ts, now):
+    if ts >= now - 86400:
+        return "today"
+    if ts >= now - 7 * 86400:
+        return "week"
+    if ts >= now - 30 * 86400:
+        return "month"
+    return "old"
+
+
+def _rm_file(p):
+    try:
+        n = os.path.getsize(p)
+    except OSError:
+        n = 0
+    try:
+        os.remove(p)
+    except OSError:
+        return 0
+    return n
+
+
+def _thumb_index():
+    """一次算清楚：素材 id -> 缩略图路径、素材 id -> 类型。
+
+    表上有 UNIQUE(source_path, inner_path)，而缩略图路径完全由素材字段算出来，
+    所以一条素材对应一张图，不会出现两条记录抢同一张图。
+    """
+    mx = config.get("thumb_max_px", 720)
+    path_by_id, kind_by_id = {}, {}
+    for row in db.q("SELECT id, kind, source_path, inner_path, mtime, size, render_id FROM assets"):
+        a = dict(row)
+        path_by_id[a["id"]] = thumbs.path_for(a, mx)
+        kind_by_id[a["id"]] = a["kind"] or "other"
+    return path_by_id, kind_by_id
+
+
+def _nested_keys():
+    """当前数据目录里每个解压 key：占多大、几条素材在用、属于哪个分类。"""
+    root = str(config.NESTED_DIR)
+    prefix = root + os.sep
+    cats = {}
+    for row in db.q("SELECT source_path, category FROM assets WHERE source_path LIKE ?",
+                    (prefix + "%",)):
+        rel = row["source_path"][len(prefix):]
+        key = rel.split(os.sep, 1)[0]
+        if not _NEST_KEY_RE.match(key):
+            continue
+        cat = (row["category"] or "").strip() or "未分类"
+        cats.setdefault(key, {})
+        cats[key][cat] = cats[key].get(cat, 0) + 1
+    try:
+        names = os.listdir(root)
+    except OSError:
+        names = []
+    out = {}
+    for key in names:
+        d = os.path.join(root, key)
+        if not _NEST_KEY_RE.match(key) or not os.path.isdir(d):
+            continue
+        size, files = _tree_size(d)
+        out[key] = {"size": size, "files": files, "cats": cats.get(key) or {}}
+    return root, prefix, out
+
+
+def _build_detail():
+    sections = []
+    _root, prefix, keys = _nested_keys()
+    by_cat = {}
+    for key, info in keys.items():
+        mine = info["cats"]
+        cat = max(mine.items(), key=lambda kv: kv[1])[0] if mine else "未分类"
+        g = by_cat.setdefault(cat, {"id": "nested:" + cat, "label": cat, "size": 0,
+                                    "files": 0, "count": 0, "keys": []})
+        g["size"] += info["size"]
+        g["files"] += info["files"]
+        g["count"] += sum(mine.values())
+        g["keys"].append(key)
+    glist = []
+    for cat in sorted(by_cat, key=lambda c: -by_cat[c]["size"]):
+        g = by_cat[cat]
+        g["note"] = "%d 个内含压缩包 · %d 条素材" % (len(g["keys"]), g["count"])
+        g["sel"] = {"what": "nested", "keys": sorted(g["keys"])}
+        glist.append(g)
+    stale = db.count(
+        "SELECT COUNT(*) FROM assets WHERE source_path LIKE ? AND source_path NOT LIKE ?",
+        ("%" + _NEST_MARK + "%", prefix + "%"))
+    if stale:
+        glist.append({"id": "nested_stale",
+                      "label": "重复的旧记录（不属于当前数据目录）",
+                      "size": 0, "files": 0, "count": stale,
+                      "note": "%d 条素材指向别处的旧解压目录，不占空间；清掉只是让列表不再重复"
+                              % stale,
+                      "sel": {"what": "nested_stale"}})
+    sections.append({"id": "nested", "label": "嵌套解压缓存",
+                     "note": "压缩包里的模型解出来的副本，最占空间；可以只清某几个分类。",
+                     "size": sum(g["size"] for g in glist),
+                     "files": sum(g["files"] for g in glist),
+                     "groups": glist})
+
+    path_by_id, kind_by_id = _thumb_index()
+    by_kind = {}
+    for aid, p in path_by_id.items():
+        k = kind_by_id[aid]
+        g = by_kind.setdefault(k, {"id": "thumbs:" + k,
+                                   "label": config.KIND_LABEL.get(k, k),
+                                   "size": 0, "files": 0, "count": 0, "paths": set()})
+        g["count"] += 1
+        g["paths"].add(p)
+    glist = []
+    for k in sorted(by_kind, key=lambda x: -len(by_kind[x]["paths"])):
+        g = by_kind[k]
+        paths = g.pop("paths")
+        for p in paths:
+            try:
+                g["size"] += os.path.getsize(p)
+                g["files"] += 1
+            except OSError:
+                pass
+        if not g["files"]:
+            continue
+        g["note"] = "%d 张缩略图 · %d 条素材在用" % (g["files"], g["count"])
+        g["sel"] = {"what": "thumbs", "kind": k}
+        glist.append(g)
+    used = set(path_by_id.values())
+    orph = {"id": "thumbs_orphan", "label": "已经用不到的残留缩略图", "size": 0,
+            "files": 0, "count": 0,
+            "note": "换过缩略图尺寸、或素材已经删掉留下的旧图，清掉不影响现在的浏览",
+            "sel": {"what": "thumbs_orphan"}}
+    try:
+        names = os.listdir(str(config.THUMB_DIR))
+    except OSError:
+        names = []
+    for f in names:
+        p = os.path.join(str(config.THUMB_DIR), f)
+        if p in used:
+            continue
+        try:
+            orph["size"] += os.path.getsize(p)
+            orph["files"] += 1
+        except OSError:
+            pass
+    if orph["files"]:
+        glist.append(orph)
+    sections.append({"id": "thumbs", "label": "缩略图缓存",
+                     "note": "浏览时自动生成的预览图，删掉后下次浏览会重新生成；可以按类型挑着删。",
+                     "size": sum(g["size"] for g in glist),
+                     "files": sum(g["files"] for g in glist),
+                     "groups": glist})
+
+    now = time.time()
+    for key, attr, label, note in (
+            ("stage", "STAGE_DIR", "预览 / 暂存缓存",
+             "打开文件时复制出来的临时副本，可以只清很久没用过的。"),
+            ("model3d", "MODEL3D_DIR", "3D 看图缓存",
+             "SKP 转出来的 3D 预览，删掉后下次打开会重新转；可以只清很久没用过的。")):
+        acc = {}
+        for rt, _dirs, files in os.walk(str(getattr(config, attr))):
+            for f in files:
+                p = os.path.join(rt, f)
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                b = acc.setdefault(_age_key(st.st_mtime, now), {"size": 0, "files": 0})
+                b["size"] += st.st_size
+                b["files"] += 1
+        glist = []
+        for bk in _AGE_ORDER:
+            b = acc.get(bk)
+            if not b or not b["files"]:
+                continue
+            glist.append({"id": key + ":" + bk, "label": _AGE_LABEL[bk],
+                          "size": b["size"], "files": b["files"], "count": b["files"],
+                          "note": "%d 个文件" % b["files"],
+                          "sel": {"what": key, "buckets": [bk]}})
+        sections.append({"id": key, "label": label, "note": note,
+                         "size": sum(g["size"] for g in glist),
+                         "files": sum(g["files"] for g in glist),
+                         "groups": glist})
+    return {"ready": True, "sections": sections,
+            "total": sum(s["size"] for s in sections), "at": time.time()}
+
+
+def cache_detail(force: bool = False) -> dict:
+    """缓存明细：按分类 / 类型 / 新旧分好组，120 秒内复用同一次统计结果。"""
+    now = time.time()
+    with _DETAIL_LOCK:
+        data, at = _DETAIL["data"], _DETAIL["at"]
+        if force or data is None or (now - at) > _DETAIL_TTL:
+            try:
+                data = _build_detail()
+            except Exception as e:
+                return {"ready": False, "msg": str(e), "sections": [], "total": 0}
+            _DETAIL["data"] = data
+            _DETAIL["at"] = time.time()
+    return data
+
+
+def _clean_nested(keys):
+    """只删指定的解压目录，同时让这几条记录下次扫描能重新解出来。"""
+    root = str(config.NESTED_DIR)
+    prefix = root + os.sep
+    safe_root = os.path.abspath(root) + os.sep
+    freed = 0
+    for key in keys:
+        key = str(key)
+        if not _NEST_KEY_RE.match(key):
+            continue                      # 防目录穿越：只认正常的 16 位 key
+        d = os.path.join(root, key)
+        if os.path.isdir(d) and os.path.abspath(d).startswith(safe_root):
+            freed += _tree_size(d)[0]
+            shutil.rmtree(d, ignore_errors=True)
+        db.ex("DELETE FROM archive_meta WHERE path LIKE ?", (prefix + key + os.sep + "%",))
+        db.ex("UPDATE assets SET thumb_status='pending', thumb_key='' "
+              "WHERE source_path LIKE ?", (prefix + key + os.sep + "%",))
+    os.makedirs(root, exist_ok=True)
+    return freed
+
+
+def _clean_nested_stale():
+    """清掉指向别的数据目录的旧解压记录（只删数据库里的重复条目，不动文件）。"""
+    mark = "%" + _NEST_MARK + "%"
+    keep = str(config.NESTED_DIR) + os.sep + "%"
+    sql = " FROM assets WHERE source_path LIKE ? AND source_path NOT LIKE ?"
+    n = db.count("SELECT COUNT(*)" + sql, (mark, keep))
+    db.ex("DELETE" + sql, (mark, keep))
+    db.ex("DELETE FROM archive_meta WHERE path LIKE ? AND path NOT LIKE ?", (mark, keep))
+    return n
+
+
+def _clean_thumbs_kind(kind):
+    if not kind:
+        return 0
+    path_by_id, kind_by_id = _thumb_index()
+    picked = [i for i, k in kind_by_id.items() if k == kind]
+    if not picked:
+        return 0
+    freed = 0
+    for i in picked:
+        freed += _rm_file(path_by_id[i])
+    db.exmany("UPDATE assets SET thumb_status='pending', thumb_key='' WHERE id=?",
+              [(i,) for i in picked])
+    return freed
+
+
+def _clean_thumbs_orphan():
+    path_by_id, _kind = _thumb_index()
+    used = set(path_by_id.values())
+    try:
+        names = os.listdir(str(config.THUMB_DIR))
+    except OSError:
+        return 0
+    freed = 0
+    for f in names:
+        p = os.path.join(str(config.THUMB_DIR), f)
+        if p in used:
+            continue
+        freed += _rm_file(p)
+    return freed
+
+
+def _clean_dir_buckets(d, buckets):
+    if not buckets:
+        return 0
+    now = time.time()
+    freed = 0
+    for root, dirs, files in os.walk(str(d), topdown=False):
+        for f in files:
+            p = os.path.join(root, f)
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            if _age_key(st.st_mtime, now) in buckets:
+                try:
+                    os.remove(p)
+                    freed += st.st_size
+                except OSError:
+                    pass
+        for dd in dirs:
+            try:
+                os.rmdir(os.path.join(root, dd))
+            except OSError:
+                pass
+    return freed
+
+
+def cleanup_cache(items) -> dict:
+    """按明细里勾选的项清理（items 就是明细分组里的 sel 字段）。"""
+    freed, done = 0, []
+    for it in (items or []):
+        if not isinstance(it, dict):
+            continue
+        what = str(it.get("what") or "")
+        if what == "nested":
+            freed += _clean_nested(it.get("keys") or [])
+            done.append("嵌套解压")
+        elif what == "nested_stale":
+            n = _clean_nested_stale()
+            if n:
+                done.append("重复记录 %d 条" % n)
+        elif what == "thumbs":
+            freed += _clean_thumbs_kind(str(it.get("kind") or ""))
+            done.append("缩略图")
+        elif what == "thumbs_orphan":
+            freed += _clean_thumbs_orphan()
+            done.append("残留缩略图")
+        elif what == "stage":
+            freed += _clean_dir_buckets(config.STAGE_DIR, set(it.get("buckets") or []))
+            done.append("预览暂存")
+        elif what == "model3d":
+            freed += _clean_dir_buckets(config.MODEL3D_DIR, set(it.get("buckets") or []))
+            done.append("3D 缓存")
+    invalidate_cache_stats()
+    return {"freed": freed, "done": list(dict.fromkeys(done))}

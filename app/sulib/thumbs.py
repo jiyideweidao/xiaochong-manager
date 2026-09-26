@@ -71,12 +71,14 @@ def cache_key(*parts) -> str:
     return hashlib.sha1(raw).hexdigest()[:24]
 
 
-def path_for(asset) -> str:
+def path_for(asset, max_px=None) -> str:
     # 注意：old 版缓存只用了前 6 个字段，这里必须保持一致，
     # 只在需要「换算法」的类别上追加版本号，否则老缓存会全部失效。
+    # max_px 是给批量统计用的：传进来就不用每条都读一次配置文件。
     parts = [asset["source_path"], asset.get("inner_path") or "",
              int(asset.get("mtime") or 0), int(asset.get("size") or 0),
-             config.get("thumb_max_px", 720), asset.get("render_id") or 0]
+             config.get("thumb_max_px", 720) if max_px is None else max_px,
+             asset.get("render_id") or 0]
     rev = _rev(asset.get("kind") or "")
     if rev:
         parts.append(rev)

@@ -47,8 +47,8 @@ function showCacheBar(c, s) {
   const bar = $("#cachebar");
   bar.classList.remove("hidden");
   bar.innerHTML = `<span class="ic">🧹</span>
-    <span class="tx">缓存已经占了 <b>${fmtSize(c.total)}</b><br><span class="dim">${cacheParts(c)}　清掉不影响素材文件，缩略图以后会自动重建</span></span>
-    <button class="btn primary" id="cacheClean">现在清理</button>
+    <span class="tx">缓存已经占了 <b>${fmtSize(c.total)}</b><br><span class="dim">${cacheParts(c)}　清掉不影响素材文件，缩略图以后会自动重建；可以只挑你不想留的几项清</span></span>
+    <button class="btn primary" id="cacheClean">挑着清理…</button>
     ${once ? "" : '<button class="btn ghost" id="cacheLater">稍后再说</button>'}
     <button class="btn ghost" id="cacheOff">${once ? "知道了" : "不再提醒"}</button>`;
   $("#cacheClean").onclick = () => { bar.classList.add("hidden"); openClean(); };
@@ -86,40 +86,104 @@ async function checkCache(fresh) {
     showCacheBar(c, s);
   } catch (e) { /* 忽略 */ } finally { CACHE.running = false; }
 }
+/* 清理缓存：先把明细拉回来，让用户自己勾选要清哪几项，不勾的绝不动 */
+let CLEAN = null, CLEAN_SEL = {};
 async function openClean() {
-  let c = {};
-  try { c = ((await api("/api/state")) || {}).cache || {}; } catch (e) {}
-  const order = ["stage", "nested", "thumbs", "model3d"];
-  const rows = order.filter(k => c[k]).map(k =>
-    `<div class="clrow"><span class="nm">${esc(c[k].label)}</span>
-      <span class="dim">${fmtSize(c[k].size)} · ${c[k].files} 个文件</span>
-      <button class="btn sm" data-clean="${k}">清理这一项</button></div>`).join("")
-    || `<div class="hint">还没统计好，关掉再打开一次就能看到明细。</div>`;
+  CLEAN = null; CLEAN_SEL = {};
   modal(`<div class="mh"><span>清理缓存</span><button class="ghost icon" data-close>×</button></div>
-    <div class="mb">
-      <div class="hint" style="margin-top:0">下面都是程序自己生成的临时文件，删掉<b>不会动你的素材</b>；
-        缩略图删掉后，下次浏览时会自动重新生成。</div>
-      ${rows}
-      <div class="dacts" style="margin-top:14px">
-        <button class="btn primary" id="cleanAll">全部清理${c.total ? "（释放 " + fmtSize(c.total) + "）" : ""}</button>
-      </div>
-      <div class="hint">「嵌套解压缓存」是压缩包里的模型解出来的副本，清掉后要重新扫描素材库才能恢复，清理前会再问一次。</div>
-    </div>
-    <div class="mf"><button class="btn" data-close>关闭</button></div>`);
-  const one = async what => {
-    if (what === "nested" && !confirm("清理嵌套解压缓存？\n\n会释放较多空间，但需要重新扫描素材库才能恢复压缩包内部的模型。")) return;
-    const r = await api("/api/cleanup", { what });
-    toast(r.msg + "，会自动重新生成。", "ok", 6000);
-    closeModal(); loadState(); checkCache(true);
-  };
-  $$("#modalBox [data-clean]").forEach(b => b.onclick = () => one(b.dataset.clean));
-  const all = $("#cleanAll");
-  if (all) all.onclick = async () => {
-    if (!confirm("全部清理？\n\n会删掉缩略图、嵌套解压和预览暂存缓存，之后会自动重建。")) return;
-    const r = await api("/api/cleanup", { what: "all" });
-    toast(r.msg + "，会自动重新生成。", "ok", 6000);
-    closeModal(); loadState(); checkCache(true);
-  };
+    <div class="mb" id="cleanBody"><div class="hint" style="margin-top:0">正在统计缓存明细，第一次要几秒钟…</div></div>
+    <div class="mf">
+      <span class="dim" id="cleanSum" style="margin-right:auto;font-size:12.5px">请勾选要清理的项</span>
+      <button class="btn" data-close>关闭</button>
+      <button class="btn primary" id="cleanGo" disabled>清理选中的项</button>
+    </div>`);
+  let d = null;
+  try { d = await api("/api/cache/detail"); } catch (e) { /* 下面统一提示 */ }
+  if (!d || !d.ready) {
+    $("#cleanBody").innerHTML = `<div class="hint" style="margin-top:0">统计失败${d && d.msg ? "：" + esc(d.msg) : ""}，关掉面板再打开一次试试。</div>`;
+    return;
+  }
+  CLEAN = d;
+  renderClean();
+}
+
+function renderClean() {
+  const d = CLEAN;
+  if (!d) return;
+  const html = d.sections.map(sec => {
+    const rows = sec.groups.length
+      ? sec.groups.map(g => {
+        CLEAN_SEL[g.id] = g.sel;
+        return `<label class="clrow"><input type="checkbox" data-g="${esc(g.id)}">
+          <span class="nm">${esc(g.label)}</span>
+          <span class="dim">${fmtSize(g.size)} · ${esc(g.note)}</span></label>`;
+      }).join("")
+      : `<div class="hint" style="margin-top:0">这一类现在是空的。</div>`;
+    return `<div class="clsec">
+      <div class="clhead"><span class="nm">${esc(sec.label)}</span>
+        <span class="dim">${fmtSize(sec.size)} · ${sec.files} 个文件</span>
+        ${sec.groups.length ? `<button class="btn sm ghost" data-sec="${esc(sec.id)}">全选</button>` : ""}</div>
+      <div class="hint" style="margin-top:6px">${esc(sec.note)}</div>
+      ${rows}</div>`;
+  }).join("");
+  $("#cleanBody").innerHTML = `<div class="hint" style="margin-top:0">下面全是程序自己生成的临时文件，
+    <b>不会动你的素材原文件</b>；想清哪几项就勾哪几项，没勾的一点都不会动。</div>${html}`;
+  $$("#cleanBody input[type=checkbox]").forEach(cb => cb.onchange = cleanSum);
+  $$("#cleanBody [data-sec]").forEach(b => b.onclick = () => {
+    const cbs = $$("input[type=checkbox]", b.closest(".clsec"));
+    const on = cbs.some(c => !c.checked);
+    cbs.forEach(c => c.checked = on);
+    cleanSum();
+  });
+  $("#cleanGo").onclick = doClean;
+  cleanSum();
+}
+
+function findGroup(id) {
+  for (const sec of (CLEAN ? CLEAN.sections : []))
+    for (const g of sec.groups) if (g.id === id) return g;
+  return null;
+}
+
+function cleanSum() {
+  const on = $$("#cleanBody input[type=checkbox]:checked");
+  let size = 0;
+  on.forEach(c => { const g = findGroup(c.dataset.g); if (g) size += g.size || 0; });
+  $("#cleanGo").disabled = !on.length;
+  $("#cleanSum").textContent = on.length
+    ? `已选 ${on.length} 项，约 ${fmtSize(size)}`
+    : "请勾选要清理的项";
+}
+
+async function doClean() {
+  const on = $$("#cleanBody input[type=checkbox]:checked");
+  if (!on.length) return;
+  const sels = on.map(c => CLEAN_SEL[c.dataset.g]).filter(Boolean);
+  let size = 0; const names = [];
+  on.forEach(c => {
+    const g = findGroup(c.dataset.g);
+    if (!g) return;
+    size += g.size || 0;
+    names.push("· " + g.label + "（" + fmtSize(g.size) + (g.size ? "" : "，不占空间") + "）");
+  });
+  let msg = `要清理这 ${on.length} 项，约 ${fmtSize(size)}：\n\n${names.join("\n")}\n\n`;
+  if (sels.some(x => x.what === "nested"))
+    msg += "「嵌套解压缓存」清掉后，这些模型要重新扫描素材库才能打开。\n";
+  if (sels.some(x => x.what === "nested_stale"))
+    msg += "「重复的旧记录」只删列表里的重复条目，不会删除任何文件。\n";
+  msg += "不会动你的素材原文件，确定清理吗？";
+  if (!confirm(msg)) return;
+  const btn = $("#cleanGo");
+  btn.disabled = true; btn.textContent = "正在清理…";
+  try {
+    const r = await api("/api/cleanup", { items: sels });
+    toast((r.msg || "清理完成") + "。", "ok", 7000);
+    closeModal();
+    loadState(); checkCache(true);
+  } catch (e) {
+    toast("清理失败：" + e.message, "err", 7000);
+    btn.disabled = false; btn.textContent = "清理选中的项";
+  }
 }
 
 /* ---------------- 视图切换 ---------------- */
@@ -1060,8 +1124,8 @@ async function openSettings() {
         <button class="btn" id="openThumb">打开缩略图缓存</button>
         <button class="btn ghost" id="rebuild">重新扫描全部素材</button>
         <button class="btn ghost" id="cleanStage">清理预览/暂存缓存</button>
-        <button class="btn ghost" id="cleanThumb">清理缩略图缓存</button>
-        <button class="btn ghost" id="cleanNested">清理嵌套解压缓存</button>
+        <button class="btn ghost" id="cleanThumb">清理缩略图…（按类型挑）</button>
+        <button class="btn ghost" id="cleanNested">清理嵌套解压…（按分类挑）</button>
         <button class="btn" id="cleanPanel">清理缓存面板…</button>
         <button class="btn ghost" id="quit">退出程序</button>
       </div>
@@ -1200,9 +1264,11 @@ async function openSettings() {
     toast(r.msg + "，会自动重新生成。", "ok", 6000);
     loadState();
   };
-  $("#cleanStage").onclick = () => clean("stage");
-  $("#cleanThumb").onclick = () => clean("thumbs");
-  $("#cleanNested").onclick = () => { if (confirm("清理嵌套解压缓存？\n\n会释放较多空间，但需要重新扫描素材库才能恢复内部模型。")) clean("nested"); };
+  $("#cleanStage").onclick = () => {
+    if (confirm("清理「预览 / 暂存缓存」？\n\n这些只是打开文件时复制出来的临时副本，删掉不影响素材。")) clean("stage");
+  };
+  $("#cleanThumb").onclick = () => openClean();
+  $("#cleanNested").onclick = () => openClean();
   $("#quit").onclick = () => {
     api("/api/shutdown", {});
     document.body.innerHTML = '<div style="display:grid;place-items:center;height:100vh;color:#6b7280;font:14px sans-serif">小虫管理器已退出，可直接关闭本页。</div>';

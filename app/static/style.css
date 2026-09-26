@@ -316,3 +316,12 @@ table.pv-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:1
   border-radius:9px;margin-bottom:8px}
 .clrow .nm{font-weight:600;min-width:118px}
 .clrow .dim{flex:1;min-width:0;word-break:break-all}
+/* 清理缓存面板：按分类 / 类型勾选 */
+.clsec{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+.clsec .clhead{display:flex;align-items:center;gap:10px}
+.clsec .clhead .nm{font-weight:700;min-width:0}
+.clsec .clhead .dim{flex:1;min-width:0;color:var(--mut);font-size:12px}
+.clsec .clrow{cursor:pointer;margin-top:8px}
+.clsec .clrow:hover{background:#fafbfc}
+.clsec .clrow .nm{min-width:190px}
+.clsec .clrow input[type=checkbox]{width:15px;height:15px;flex:none;accent-color:var(--ac);cursor:pointer}
