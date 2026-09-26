@@ -1,0 +1,5 @@
+# 运行依赖（实测通过的版本写在注释里）
+fastapi>=0.115          # 实测 0.141.1
+uvicorn[standard]>=0.30 # 实测 0.54.0（自带 httptools / websockets，性能更好）
+pillow>=10              # 实测 12.3.0  —— 图片与缩略图
+pypdfium2>=4            # 实测 5.13.0  —— PDF 首页渲染

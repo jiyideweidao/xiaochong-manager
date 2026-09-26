@@ -1,0 +1,4 @@
+# 开发 / 打包 / 自检用（运行时不需要）
+-r requirements.txt
+pyinstaller>=6.10       # 实测 6.22.3
+websockets>=13          # 实测 17.1 —— tools/smoke_test.py 走 CDP 驱动无头浏览器

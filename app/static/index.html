@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小虫管理器 · 本地资源管理器</title>
+<link rel="icon" href="/static/小虫.ico">
+<link rel="stylesheet" href="/static/style.css?v=2.1.4">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">虫</span><div><b>小虫管理器</b><small>本地资源管理器</small></div></div>
+  <div class="modesw" id="modesw">
+    <button data-mode="lib" class="on">素材库</button>
+    <button data-mode="browse">浏览文件</button>
+  </div>
+  <div class="search">
+    <input id="q" type="search" placeholder="搜索素材名 / 分类 / 关键词 / 扩展名，如：吊灯、现代、.pdf（按 / 聚焦）" autocomplete="off">
+    <button id="qclear" class="ghost" title="清空">×</button>
+  </div>
+  <div class="topactions">
+    <button id="btnScan" class="btn">扫描素材库</button>
+    <button id="btnPrefetch" class="btn ghost">生成缩略图</button>
+    <button id="btnSettings" class="btn ghost icon" title="设置">⚙</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div id="sideLib">
+      <section>
+        <h4>素材库目录</h4>
+        <div id="roots" class="roots"></div>
+        <button id="btnAddRoot" class="link">+ 添加素材目录</button>
+      </section>
+      <section>
+        <h4>类型</h4>
+        <div id="kinds" class="nav"></div>
+      </section>
+      <section>
+        <h4>分类 <span id="catCount" class="dim"></span></h4>
+        <input id="catFilter" class="miniq" placeholder="筛选分类…">
+        <div id="cats" class="nav scroll"></div>
+      </section>
+      <section id="styleBox">
+        <h4>风格</h4>
+        <div id="styles" class="nav wrap"></div>
+      </section>
+    </div>
+    <div id="sideBrowse" class="hidden">
+      <section>
+        <h4>常用位置</h4>
+        <div id="places" class="nav"></div>
+      </section>
+      <section>
+        <h4>此电脑</h4>
+        <div id="drives" class="nav"></div>
+      </section>
+      <section>
+        <h4>本目录类型</h4>
+        <div id="dirKinds" class="nav wrap"></div>
+        <div class="hint" style="margin-top:8px">点类型可只看该类文件。<br>双击文件用系统默认程序打开。</div>
+      </section>
+    </div>
+    <section class="stat" id="stats"></section>
+  </aside>
+
+  <main class="main">
+    <div class="toolbar" id="tbLib">
+      <div class="crumb" id="crumb">全部素材</div>
+      <div class="tools">
+        <label class="chk"><input type="checkbox" id="onlyRender"> 只看带效果图</label>
+        <select id="sort">
+          <option value="category">按分类</option>
+          <option value="name">按名称 A→Z</option>
+          <option value="name_desc">按名称 Z→A</option>
+          <option value="kind">按类型</option>
+          <option value="size">按大小 大→小</option>
+          <option value="new">按修改时间 新→旧</option>
+          <option value="random">随机</option>
+        </select>
+        <input type="range" id="zoom" min="120" max="320" value="190" title="缩略图大小">
+        <button id="btnSelectAll" class="btn ghost sm">全选</button>
+      </div>
+    </div>
+
+    <div class="toolbar hidden" id="tbBrowse">
+      <button id="btnUp" class="btn ghost sm" title="上一级">↑ 上一级</button>
+      <button id="btnReload" class="btn ghost sm" title="刷新">刷新</button>
+      <input id="pathInput" class="pathin" placeholder="输入路径后回车，例如 D:\我的素材" autocomplete="off">
+      <div class="tools">
+        <button id="btnMkdir" class="btn ghost sm">新建文件夹</button>
+        <button id="btnPaste" class="btn ghost sm">粘贴</button>
+        <button id="btnPickDir" class="btn ghost sm">浏览…</button>
+        <select id="sortDir">
+          <option value="name">按名称</option>
+          <option value="kind">按类型</option>
+          <option value="size">按大小</option>
+          <option value="new">按修改时间</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="showHidden"> 显示隐藏</label>
+        <input type="range" id="zoom2" min="120" max="320" value="190" title="缩略图大小">
+        <button id="btnSelectAll2" class="btn ghost sm">全选</button>
+      </div>
+    </div>
+
+    <div id="crumbs" class="crumbs hidden"></div>
+    <div id="grid" class="grid"></div>
+    <div id="sentinel" class="sentinel"></div>
+    <div id="empty" class="empty hidden"></div>
+  </main>
+</div>
+
+<div id="drawer" class="drawer hidden">
+  <div class="drawer-head">
+    <b id="dTitle">详情</b>
+    <button id="dClose" class="ghost icon">×</button>
+  </div>
+  <div class="drawer-body" id="dBody"></div>
+</div>
+
+<div id="selbar" class="selbar hidden">
+  <div class="selinfo"><b id="selCount">0</b> 项已选 <button id="selClear" class="link">清除</button></div>
+  <div class="selacts" id="selacts"></div>
+</div>
+
+<div id="modal" class="modal hidden"><div class="modal-box" id="modalBox"></div></div>
+<div id="toasts" class="toasts"></div>
+<div id="jobs" class="jobs hidden"></div>
+
+<script src="/static/app.js?v=2.1.4"></script>
+</body>
+</html>
