@@ -113,7 +113,8 @@ def api_state():
                                             "index_inside_archives", "max_file_mb",
                                             "text_preview_kb", "sketchup_exe",
                                             "image_viewer", "cache_remind_on",
-                                            "cache_remind_min", "cache_limit_mb")},
+                                            "cache_remind_once", "cache_remind_min",
+                                            "cache_limit_mb")},
         "disk_free": ops.disk_free(str(config.DATA_DIR)),
         "scanning": STATE["scanning"],
         "scanning_stats": STATE["last_stats"],
@@ -659,7 +660,8 @@ def api_settings(payload: dict = Body(...)):
     for k in ("seven_zip", "ffmpeg", "thumb_max_px", "workers", "index_images",
               "image_max_mb", "index_all_files", "index_inside_archives", "max_file_mb",
               "text_preview_kb", "sketchup_exe", "image_viewer",
-              "cache_remind_on", "cache_remind_min", "cache_limit_mb"):
+              "cache_remind_on", "cache_remind_once", "cache_remind_min",
+              "cache_limit_mb"):
         if k in payload:
             cfg[k] = payload[k]
     if "open_with" in payload:

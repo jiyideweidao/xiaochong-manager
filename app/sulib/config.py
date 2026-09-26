@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "小虫管理器"
 APP_SUB = "本地资源管理器 · 素材库"
 APP_EN = "XiaoChongManager"
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 
 # ----------------------------------------------------------------- 路径
 def _app_dir() -> Path:
@@ -191,6 +191,8 @@ DEFAULTS = {
     "image_viewer": "",
     # 定时提醒清理缓存
     "cache_remind_on": True,
+    # True = 同一次超限只提醒一次（清理后自动重新武装）
+    "cache_remind_once": True,
     "cache_remind_min": 60,
     "cache_limit_mb": 1500,
 }

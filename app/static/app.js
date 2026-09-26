@@ -36,27 +36,32 @@ const kindColor = k => (S.kindMap[k] || {}).color || "#6b7280";
 
 /* ---------------- 缓存提醒 ---------------- */
 const CACHE = { info: null, running: false, ticked: 0 };
+const WARN_KEY = "xc_cache_warned";      // 置 1 = 这一次超限已经提醒过了
 function cacheParts(c) {
   return ["stage", "thumbs", "nested", "model3d"].filter(k => c[k] && c[k].size)
     .sort((a, b) => c[b].size - c[a].size)
     .map(k => `<i>${esc(c[k].label)} ${fmtSize(c[k].size)}</i>`).join("　·　");
 }
-function showCacheBar(c) {
+function showCacheBar(c, s) {
+  const once = (s || {}).cache_remind_once !== false;
   const bar = $("#cachebar");
   bar.classList.remove("hidden");
   bar.innerHTML = `<span class="ic">🧹</span>
     <span class="tx">缓存已经占了 <b>${fmtSize(c.total)}</b><br><span class="dim">${cacheParts(c)}　清掉不影响素材文件，缩略图以后会自动重建</span></span>
     <button class="btn primary" id="cacheClean">现在清理</button>
-    <button class="btn ghost" id="cacheLater">稍后再说</button>
-    <button class="btn ghost" id="cacheOff">不再提醒</button>`;
+    ${once ? "" : '<button class="btn ghost" id="cacheLater">稍后再说</button>'}
+    <button class="btn ghost" id="cacheOff">${once ? "知道了" : "不再提醒"}</button>`;
   $("#cacheClean").onclick = () => { bar.classList.add("hidden"); openClean(); };
-  $("#cacheLater").onclick = () => {
+  const later = $("#cacheLater");
+  if (later) later.onclick = () => {
     localStorage.setItem("xc_cache_remind_at", String(Date.now()));
     bar.classList.add("hidden");
   };
   $("#cacheOff").onclick = async () => {
-    await api("/api/settings", { cache_remind_on: false });
     bar.classList.add("hidden");
+    if (once)
+      return toast("知道了。清理之前不会再提醒你，想早点看到提醒去「设置 → 维护 → 重置提醒」。", "ok", 8000);
+    await api("/api/settings", { cache_remind_on: false });
     toast("已关闭提醒，想再打开去「设置 → 维护」", "ok", 6000);
     loadState();
   };
@@ -71,10 +76,14 @@ async function checkCache(fresh) {
     if (s.cache_remind_on === false) return;
     const limit = (+s.cache_limit_mb || 1500) * 1048576;
     const every = Math.max(5, +s.cache_remind_min || 60) * 60000;
+    // 掉回上限以下 = 清理过了，提醒重新武装（下次再超限还会提醒一次）
+    if (c.total < limit) { localStorage.removeItem(WARN_KEY); return; }
+    if (localStorage.getItem(WARN_KEY) === "1" && s.cache_remind_once !== false) return;
     const last = +localStorage.getItem("xc_cache_remind_at") || 0;
-    if (c.total < limit || Date.now() - last < every) return;
+    if (Date.now() - last < every) return;
     localStorage.setItem("xc_cache_remind_at", String(Date.now()));
-    showCacheBar(c);
+    if (s.cache_remind_once !== false) localStorage.setItem(WARN_KEY, "1");
+    showCacheBar(c, s);
   } catch (e) { /* 忽略 */ } finally { CACHE.running = false; }
 }
 async function openClean() {
@@ -1058,12 +1067,17 @@ async function openSettings() {
       </div>
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">定时提醒清理缓存</h4>
       <label class="chk"><input type="checkbox" id="setRemind" ${s.cache_remind_on === false ? "" : "checked"}> 定时提醒我清理缓存</label>
+      <label class="chk"><input type="checkbox" id="setOnce" ${s.cache_remind_once === false ? "" : "checked"}> 只提醒一次（清理过之后再提醒）</label>
       <div class="fldrow" style="grid-template-columns:1fr 1fr">
         <div class="fld"><label>隔多久提醒一次（分钟）</label><input id="setRmin" type="number" value="${+s.cache_remind_min || 60}"></div>
         <div class="fld"><label>缓存超过多少 MB 才提醒</label><input id="setRmb" type="number" value="${+s.cache_limit_mb || 1500}"></div>
       </div>
       <div class="hint">当前缓存占用：<b>${fmtSize((st.cache || {}).total || 0)}</b>${(st.cache || {}).ready === false ? "（正在统计…）" : ""}
-        <button class="link" id="cleanOpen">打开清理面板</button></div>
+        　提醒状态：<b>${localStorage.getItem("xc_cache_warned") === "1" ? "已提醒过" : "还没提醒过"}</b>
+        <button class="link" id="cleanOpen">打开清理面板</button>
+        <button class="link" id="remindReset">重置提醒</button><br>
+        勾了「只提醒一次」之后，同一次超限只弹一次；等缓存清理到上限以下会自动重新武装。
+        想固定间隔反复提醒，就把它取消勾选。</div>
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:16px 0 8px">重命名记录（可撤销）</h4>
       <div>${(hist.items || []).slice(0, 6).map(h =>
         `<div class="row" style="margin-bottom:6px"><span class="pill">${esc(h.batch)}</span>
@@ -1136,6 +1150,19 @@ async function openSettings() {
   };
   $("#cleanPanel").onclick = () => openClean();
   $("#cleanOpen").onclick = () => openClean();
+  const syncOnce = () => {
+    const on = $("#setOnce").checked;
+    $("#setRmin").disabled = on;
+    $("#setRmin").style.opacity = on ? .5 : 1;
+  };
+  $("#setOnce").onchange = syncOnce;
+  syncOnce();
+  $("#remindReset").onclick = () => {
+    localStorage.removeItem(WARN_KEY);
+    localStorage.removeItem("xc_cache_remind_at");
+    toast("提醒已重置，下一次检查缓存时就会重新判断。", "ok", 6000);
+    checkCache(true);
+  };
   $("#openData").onclick = () => api("/api/open-folder", { path: st.data_dir });
   $("#openThumb").onclick = () => api("/api/open-folder", { path: st.thumb_dir });
   $("#rebuild").onclick = () => { closeModal(); $("#btnScan").click(); };
@@ -1149,11 +1176,13 @@ async function openSettings() {
       index_all_files: $("#setAll").checked, index_inside_archives: $("#setInArc").checked,
       index_images: $("#setImgOn").checked,
       cache_remind_on: $("#setRemind").checked,
+      cache_remind_once: $("#setOnce").checked,
       cache_remind_min: Math.max(5, +$("#setRmin").value || 60),
       cache_limit_mb: Math.max(10, +$("#setRmb").value || 1500),
       open_with: ow,
     });
     if ($("#setRemind").checked && s.cache_remind_on === false) localStorage.removeItem("xc_cache_remind_at");
+    if ($("#setOnce").checked && s.cache_remind_once === false) localStorage.removeItem(WARN_KEY);
     const idxChanged = ($("#setAll").checked !== !!s.index_all_files)
                     || ($("#setInArc").checked !== !!s.index_inside_archives)
                     || ($("#setImgOn").checked !== !!s.index_images);
