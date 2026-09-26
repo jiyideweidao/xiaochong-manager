@@ -6,6 +6,7 @@ import shutil
 import string
 import subprocess
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -360,12 +361,11 @@ def _script_target(exe: str, cmd: str) -> str:
     return ""
 
 
-def _assoc_exes(ext: str) -> list:
-    """注册表里为该扩展名登记过的打开程序，按 Windows 的优先级排列。
+def _assoc_cmds(ext: str) -> list:
+    """注册表里为该扩展名登记的「打开命令」完整串（含 /photo /view 这类参数）。
 
-    先找「ProgId」（用户在资源管理器里选的 UserChoice 优先），再拿 ProgId 去各个
-    注册表根里找 shell\\open\\command。不检查文件是否存在，方便界面提示
-    「登记的是哪个程序、在不在」。
+    豆包（Doubao.Image）这类商店应用在注册表里没有命令串，所以这里查不到，
+    说明只能交给系统 shell 去打开。优先级：用户选择 > HKCR > HKLM。
     """
     try:
         import winreg
@@ -386,13 +386,11 @@ def _assoc_exes(ext: str) -> list:
             return None
 
     progs = []
-    # 1) 用户在资源管理器里「始终用这个应用打开」选定的 ProgId
     uc = val(winreg.HKEY_CURRENT_USER,
              "SOFTWARE" + _R + "Microsoft" + _R + "Windows" + _R + "CurrentVersion"
              + _R + "Explorer" + _R + "FileExts" + _R + ext + _R + "UserChoice", "ProgId")
     if uc:
         progs.append(str(uc))
-    # 2) 各注册表根下该扩展名登记的 ProgId
     for hive, base in roots:
         prog = val(hive, (base + ext) if base else ext)
         if prog and str(prog) not in progs:
@@ -409,14 +407,185 @@ def _assoc_exes(ext: str) -> list:
                     break
             if cmd:
                 break
-        exe = _exe_from_cmd(cmd or "")
+        if cmd and str(cmd) not in out:
+            out.append(str(cmd))
+    return out
+
+
+def _assoc_exes(ext: str) -> list:
+    """注册表登记的打开程序（exe 路径），含 wscript 这类脚本宿主解析后的真身。"""
+    out = []
+    for cmd in _assoc_cmds(ext):
+        exe = _exe_from_cmd(cmd)
         if not exe:
             continue
-        real = _script_target(exe, cmd or "")   # wscript -> 脚本里真正的 exe
+        real = _script_target(exe, cmd)
         for e2 in (real, exe):
             if e2 and e2 not in out:
                 out.append(e2)
     return out
+
+
+def _split_cmd(cmd: str) -> list:
+    """把 '"C:/x.exe" /photo /view "%1"' 拆成 ['C:/x.exe', '/photo', '/view', '%1']。"""
+    return [m.group(1) if m.group(1) is not None else m.group(2)
+            for m in re.finditer(r'"([^"]*)"|(\S+)', cmd or "")]
+
+
+def launch_with_command(cmd: str, path: str) -> str:
+    """按注册表里的完整命令启动（保留 /photo /view 这类参数，替掉 %1 / %L）。
+
+    只认第一段是真实存在 .exe 的命令；像 .exe 文件自己那种 "%1 %*" 会被拒绝，
+    免得把用户选中的程序又启动一遍。返回实际用到的 exe，失败返回空串。
+    """
+    toks = [t for t in _split_cmd(cmd) if t]
+    if not toks:
+        return ""
+    exe = os.path.expandvars(toks[0].strip().strip('"'))
+    if not exe.lower().endswith(".exe") or not os.path.isfile(exe):
+        return ""
+    if os.path.normcase(exe) == os.path.normcase(os.path.abspath(path)):
+        return ""
+    args, hit = [], False
+    for t in toks[1:]:
+        if re.search(r"%[1lLs*]", t):
+            args.append(re.sub(r"%[1lLs*]", lambda m: path, t))
+            hit = True
+        else:
+            args.append(t)
+    if not hit:
+        args.append(path)
+    subprocess.Popen([exe] + args)
+    return exe
+
+
+_PHOTO_VIEWER_DIRS = (r"C:\Program Files\Windows Photo Viewer",
+                      r"C:\Program Files (x86)\Windows Photo Viewer")
+
+# 看图软件下拉里「系统自带」那一项在配置里存这个标记
+PHOTO_VIEWER_ID = "@photoviewer"
+
+_FRIENDLY_NAMES = {
+    "photolaunch": "WPS 图片查看器", "wps": "WPS", "et": "WPS 表格", "wpp": "WPS 演示",
+    "sketchup": "SketchUp", "photoshop": "Photoshop", "acad": "AutoCAD",
+    "notepad": "记事本", "mspaint": "画图", "explorer": "资源管理器",
+    "wmplayer": "Windows Media Player", "7zfm": "7-Zip", "winrar": "WinRAR",
+    "acdsee": "ACDSee", "honeyview": "Honeyview", "irfanview": "IrfanView",
+    "xnview": "XnView", "jpegview": "JPEGView", "photos": "Windows 照片",
+    "rundll32": "Windows 照片查看器",
+}
+
+
+def friendly_name(exe: str) -> str:
+    """把 exe 路径变成用户看得懂的名字，例如 photolaunch.exe → WPS 图片查看器。"""
+    base = os.path.basename(str(exe or "").strip().strip('"'))
+    if not base:
+        return ""
+    key = base[:-4].lower() if base.lower().endswith(".exe") else base.lower()
+    return _FRIENDLY_NAMES.get(key, base)
+
+
+def photo_viewer() -> tuple:
+    """Windows 自带的「照片查看器」：(rundll32.exe, PhotoViewer.dll)，没有则空串。"""
+    sysroot = os.environ.get("SystemRoot") or r"C:\Windows"
+    rundll = os.path.join(sysroot, "System32", "rundll32.exe")
+    if not os.path.isfile(rundll):
+        return "", ""
+    for d in _PHOTO_VIEWER_DIRS:
+        dll = os.path.join(d, "PhotoViewer.dll")
+        if os.path.isfile(dll):
+            return rundll, dll
+    return "", ""
+
+
+def photo_viewer_available() -> bool:
+    return bool(photo_viewer()[0])
+
+
+def launch_photo_viewer(path: str) -> bool:
+    """用系统自带的照片查看器打开图片（不依赖任何第三方看图软件）。"""
+    rundll, dll = photo_viewer()
+    if not rundll:
+        return False
+    try:
+        subprocess.Popen('"%s" "%s",ImageView_Fullscreen "%s"' % (rundll, dll, path))
+        return True
+    except Exception:
+        return False
+
+
+def image_viewer_spec() -> tuple:
+    """用户设置的看图软件 → ('exe', 路径) / ('photo', 自带) / ('', '')。"""
+    v = str(config.get("image_viewer") or "").strip().strip('"')
+    if not v:
+        return "", ""
+    if v.lower() in ("@photoviewer", "photoviewer"):
+        return ("photo", "") if photo_viewer_available() else ("", "")
+    return ("exe", v) if os.path.isfile(v) else ("", "")
+
+
+def _visible_windows() -> list:
+    """当前所有「可见且有标题」的顶层窗口句柄，按 z 序（最前面在前）。"""
+    out = []
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        cb = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+        def each(hwnd, _):
+            if u.IsWindowVisible(hwnd) and u.GetWindowTextLengthW(hwnd):
+                out.append(int(hwnd))
+            return True
+
+        u.EnumWindows(cb(each), 0)
+    except Exception:
+        pass
+    return out
+
+
+def raise_later(before, seconds: float = 8.0) -> None:
+    """把刚弹出来的窗口提到最前（有些看图/文档程序是共享单实例，自己不抢焦点）。
+
+    用户点了「打开」却看不到任何反应，多半就是这个原因，所以这里补一下。
+    只提升「调用之后新出现的」窗口，不会乱动别的窗口。
+    """
+    before = set(before or ())
+
+    def work():
+        try:
+            import ctypes
+            u = ctypes.windll.user32
+        except Exception:
+            return
+        t0, hwnd = time.time(), 0
+        while time.time() - t0 < seconds:
+            time.sleep(0.35)
+            for h in _visible_windows():
+                if h not in before:
+                    hwnd = h
+                    break
+            if hwnd:
+                break
+        if not hwnd:
+            return
+        try:
+            u.ShowWindow(hwnd, 9)                                  # SW_RESTORE
+            u.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002)   # 临时置顶
+            u.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x0001 | 0x0002)   # 取消置顶
+            u.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _launch_exe(exe: str, path: str) -> tuple:
+    """用指定程序打开文件，并尽量把窗口提到最前。"""
+    before = _visible_windows()
+    subprocess.Popen([exe, path])
+    raise_later(before)
+    return True, friendly_name(exe)
 
 
 def _assoc_exe(ext: str) -> str:
@@ -450,14 +619,27 @@ def custom_program(ext: str) -> str:
 
 
 def program_for(path: str) -> str:
-    """打开某个文件该用哪个程序：自定义规则 > .skp 用 SketchUp > 空（交给系统）。"""
+    """打开某个文件该用哪个程序：自定义规则 > 看图软件(图片) > .skp 用 SketchUp > 空(交给系统)。"""
     ext = config.ext_of(path)
     exe = custom_program(ext)
     if exe:
         return exe
+    if ext in config.IMAGE_EXT and image_viewer_spec()[0] == "exe":
+        return image_viewer_spec()[1]
     if ext == ".skp":
         return sketchup_exe()
     return ""
+
+
+def viewer_status() -> dict:
+    """给界面看的「看图软件」状态。"""
+    kind, val = image_viewer_spec()
+    sysdef = system_default(".jpg")
+    return {"kind": kind, "exe": val,
+            "photo_builtin": photo_viewer_available(),
+            "system_default": friendly_name(sysdef.get("exe") or "")
+                             or (sysdef.get("registered") or ""),
+            "system_default_exe": sysdef.get("exe") or ""}
 
 
 def sketchup_exe() -> str:
@@ -496,30 +678,60 @@ def assoc_target(ext: str) -> str:
 
 
 def open_with_default(path: str) -> tuple:
-    """用合适的程序打开文件。
+    """用合适的程序打开文件，并尽量把窗口提到最前。
 
-    顺序：设置里的「文件类型默认程序」 > .skp 用 SketchUp > 系统默认程序。
-    返回 (ok, 说明)：成功时第二个值是「实际用的程序」，失败时是原因。
+    顺序：① 该扩展名单独指定的程序 → ② 看图软件（图片）→ ③ .skp 用 SketchUp
+    → ④ 注册表里登记的完整命令（保留 /photo /view 这类参数）→ ⑤ 交给系统默认。
+    返回 (ok, 说明)，说明里会写清「用了哪个程序」，用户一眼能看出到底开没开。
     """
     p = os.path.normpath(path)
     if os.path.isdir(p):
-        os.startfile(p)  # noqa: S606   文件夹 → 资源管理器
+        os.startfile(p)  # noqa: S606  文件夹 → 资源管理器
         return True, "资源管理器"
     if not os.path.isfile(p):
         return False, "文件不存在：" + p
-    exe = program_for(p)
+    ext = config.ext_of(p)
+    # ① 用户在「设置 → 文件关联」里为这个扩展名单独指定的程序
+    exe = custom_program(ext)
     if exe:
-        subprocess.Popen([exe, p])
-        return True, exe
-    if config.ext_of(p) == ".skp":
+        return _launch_exe(exe, p)
+    # ② 图片：看用户指定的看图软件
+    if ext in config.IMAGE_EXT:
+        kind, val = image_viewer_spec()
+        if kind == "exe":
+            return _launch_exe(val, p)
+        if kind == "photo":
+            before = _visible_windows()
+            if launch_photo_viewer(p):
+                raise_later(before)
+                return True, "Windows 照片查看器"
+    # ③ .skp 用 SketchUp
+    if ext == ".skp":
+        su = sketchup_exe()
+        if su:
+            return _launch_exe(su, p)
+    # ④ 注册表里登记的完整命令（带参数启动，比直接 startfile 可靠得多）
+    for cmd in _assoc_cmds(ext):
+        before = _visible_windows()
+        used = launch_with_command(cmd, p)
+        if not used:
+            continue
+        raise_later(before)
+        return True, friendly_name(_script_target(used, cmd) or used) or used
+    if ext == ".skp":
         tgt = assoc_target(".skp")
-        why = ("注册表里 .skp 指向 %s，但这个文件不存在" % tgt) if tgt else "本机没找到 SketchUp.exe"
-        return False, ("打不开 .skp：%s。\n"
-                       "装好 / 修复 SketchUp 后就能直接打开；"
-                       "也可以在「设置 → 文件类型默认程序」里给 .skp 指定程序。\n"
-                       "临时看模型可以点详情里的 3D 看图。" % why)
+        why = ("注册表把 .skp 指给了 %s，但那个文件不存在" % tgt) if tgt else "本机没找到 SketchUp.exe"
+        return False, ("打不开 .skp（%s）。\n"
+                       "装好 / 修好 SketchUp 就能直接打开，"
+                       "也可以在「设置 → 文件关联」里给 .skp 指定程序。\n"
+                       "临时想看模型，可以在小虫里点「3D 看图」直接预览，不用装 SketchUp。"
+                       % why)
+    # ⑤ 交给系统默认（Windows 商店应用，比如豆包 / 系统照片，走这条路）
+    before = _visible_windows()
     os.startfile(p)  # noqa: S606
-    return True, "系统默认程序"
+    raise_later(before)
+    d = system_default(ext)
+    return True, (friendly_name(d.get("exe") or "") or "系统默认程序")
 
 
 def open_path(path: str, mode: str = "open", job=None):
@@ -588,3 +800,56 @@ def dir_stats(path: str, limit_sec: float = 4.0):
         if time.time() - t0 > limit_sec:
             return {"size": total, "files": files, "partial": True}
     return {"size": total, "files": files, "partial": False}
+
+# ----------------------------------------------------------------- 看图软件候选
+def _find_exe(names, roots, depth: int = 3) -> list:
+    """在几个安装目录里按文件名找 exe（限深度，避免扫盘）。"""
+    out = []
+    names = {n.lower() for n in names}
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dp, dns, fns in os.walk(root):
+            if dp[len(root):].count(_R) >= depth:
+                dns[:] = []
+                continue
+            for f in fns:
+                if f.lower() in names:
+                    out.append(os.path.join(dp, f))
+    return out
+
+
+def viewer_candidates() -> list:
+    """本机能用来看图的程序候选（给「看图软件」下拉用）。"""
+    cands = []
+
+    def add(name, exe, note=""):
+        exe = (exe or "").strip()
+        if not exe:
+            return
+        if exe != PHOTO_VIEWER_ID and not os.path.isfile(exe):
+            return
+        if any(c["exe"].lower() == exe.lower() for c in cands):
+            return
+        cands.append({"name": name, "exe": exe, "note": note})
+
+    if photo_viewer_available():
+        add("Windows 自带的照片查看器", PHOTO_VIEWER_ID, "不用另装软件，最稳")
+    d = system_default(".jpg")
+    add("系统默认看图程序（%s）" % (friendly_name(d.get("exe") or "") or d.get("registered") or "未知"),
+        d.get("exe") or "", "双击图片时 Windows 用的那个")
+    for p in _find_exe(("photolaunch.exe",),
+                       (r"D:\Program Files\WPS Office", r"C:\Program Files\WPS Office",
+                        r"C:\Program Files (x86)\WPS Office"), 3):
+        add("WPS 图片查看器", p, "看 jpg/png/psd 都行")
+    for p in _find_exe(("photoshop.exe",),
+                       (r"D:\Program Files\Adobe", r"C:\Program Files\Adobe",
+                        r"D:\Program Files\Adobe Photoshop 2024",
+                        r"C:\Program Files\Adobe Photoshop 2024"), 3):
+        add("Adobe Photoshop", p, "和 PSD 一起用")
+    for p in _find_exe(("honeyview.exe", "irfanview.exe", "jpegview.exe", "xnview.exe"),
+                       (r"D:\Program Files", r"C:\Program Files", r"C:\Program Files (x86)"), 2):
+        add(friendly_name(p), p)
+    sysroot = os.environ.get("SystemRoot") or r"C:\Windows"
+    add("Windows 画图", os.path.join(sysroot, "System32", "mspaint.exe"), "临时看 / 简单改")
+    return cands

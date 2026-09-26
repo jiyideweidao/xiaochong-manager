@@ -34,6 +34,85 @@ function shortProg(s) {
 }
 const kindColor = k => (S.kindMap[k] || {}).color || "#6b7280";
 
+/* ---------------- 缓存提醒 ---------------- */
+const CACHE = { info: null, running: false, ticked: 0 };
+function cacheParts(c) {
+  return ["stage", "thumbs", "nested", "model3d"].filter(k => c[k] && c[k].size)
+    .sort((a, b) => c[b].size - c[a].size)
+    .map(k => `<i>${esc(c[k].label)} ${fmtSize(c[k].size)}</i>`).join("　·　");
+}
+function showCacheBar(c) {
+  const bar = $("#cachebar");
+  bar.classList.remove("hidden");
+  bar.innerHTML = `<span class="ic">🧹</span>
+    <span class="tx">缓存已经占了 <b>${fmtSize(c.total)}</b><br><span class="dim">${cacheParts(c)}　清掉不影响素材文件，缩略图以后会自动重建</span></span>
+    <button class="btn primary" id="cacheClean">现在清理</button>
+    <button class="btn ghost" id="cacheLater">稍后再说</button>
+    <button class="btn ghost" id="cacheOff">不再提醒</button>`;
+  $("#cacheClean").onclick = () => { bar.classList.add("hidden"); openClean(); };
+  $("#cacheLater").onclick = () => {
+    localStorage.setItem("xc_cache_remind_at", String(Date.now()));
+    bar.classList.add("hidden");
+  };
+  $("#cacheOff").onclick = async () => {
+    await api("/api/settings", { cache_remind_on: false });
+    bar.classList.add("hidden");
+    toast("已关闭提醒，想再打开去「设置 → 维护」", "ok", 6000);
+    loadState();
+  };
+}
+async function checkCache(fresh) {
+  if (CACHE.running) return;
+  CACHE.running = true;
+  try {
+    if (fresh || !CACHE.info) CACHE.info = (((await api("/api/state")) || {}).cache) || null;
+    const c = CACHE.info, s = (S.st && S.st.settings) || {};
+    if (!c || !c.total) return;
+    if (s.cache_remind_on === false) return;
+    const limit = (+s.cache_limit_mb || 1500) * 1048576;
+    const every = Math.max(5, +s.cache_remind_min || 60) * 60000;
+    const last = +localStorage.getItem("xc_cache_remind_at") || 0;
+    if (c.total < limit || Date.now() - last < every) return;
+    localStorage.setItem("xc_cache_remind_at", String(Date.now()));
+    showCacheBar(c);
+  } catch (e) { /* 忽略 */ } finally { CACHE.running = false; }
+}
+async function openClean() {
+  let c = {};
+  try { c = ((await api("/api/state")) || {}).cache || {}; } catch (e) {}
+  const order = ["stage", "nested", "thumbs", "model3d"];
+  const rows = order.filter(k => c[k]).map(k =>
+    `<div class="clrow"><span class="nm">${esc(c[k].label)}</span>
+      <span class="dim">${fmtSize(c[k].size)} · ${c[k].files} 个文件</span>
+      <button class="btn sm" data-clean="${k}">清理这一项</button></div>`).join("")
+    || `<div class="hint">还没统计好，关掉再打开一次就能看到明细。</div>`;
+  modal(`<div class="mh"><span>清理缓存</span><button class="ghost icon" data-close>×</button></div>
+    <div class="mb">
+      <div class="hint" style="margin-top:0">下面都是程序自己生成的临时文件，删掉<b>不会动你的素材</b>；
+        缩略图删掉后，下次浏览时会自动重新生成。</div>
+      ${rows}
+      <div class="dacts" style="margin-top:14px">
+        <button class="btn primary" id="cleanAll">全部清理${c.total ? "（释放 " + fmtSize(c.total) + "）" : ""}</button>
+      </div>
+      <div class="hint">「嵌套解压缓存」是压缩包里的模型解出来的副本，清掉后要重新扫描素材库才能恢复，清理前会再问一次。</div>
+    </div>
+    <div class="mf"><button class="btn" data-close>关闭</button></div>`);
+  const one = async what => {
+    if (what === "nested" && !confirm("清理嵌套解压缓存？\n\n会释放较多空间，但需要重新扫描素材库才能恢复压缩包内部的模型。")) return;
+    const r = await api("/api/cleanup", { what });
+    toast(r.msg + "，会自动重新生成。", "ok", 6000);
+    closeModal(); loadState(); checkCache(true);
+  };
+  $$("#modalBox [data-clean]").forEach(b => b.onclick = () => one(b.dataset.clean));
+  const all = $("#cleanAll");
+  if (all) all.onclick = async () => {
+    if (!confirm("全部清理？\n\n会删掉缩略图、嵌套解压和预览暂存缓存，之后会自动重建。")) return;
+    const r = await api("/api/cleanup", { what: "all" });
+    toast(r.msg + "，会自动重新生成。", "ok", 6000);
+    closeModal(); loadState(); checkCache(true);
+  };
+}
+
 /* ---------------- 视图切换 ---------------- */
 $$("#modesw button").forEach(b => b.onclick = () => setMode(b.dataset.mode));
 function setMode(m) {
@@ -85,6 +164,10 @@ async function loadState() {
     await api("/api/roots", { action: "remove", path: b.dataset.rm });
     loadState(); loadKinds(); loadFacets();
   });
+  if (st.cache) {
+    CACHE.info = st.cache;
+    if (!CACHE.ticked) { CACHE.ticked = 1; checkCache(false); }
+  }
   return st;
 }
 
@@ -323,7 +406,10 @@ function pvHtml(it) {
       <div class="lab">${esc(it.name)}</div></div>`;
   }
   const t = it.thumb, r = it.raw, tl = thumbLg(t);
-  const bar = `<div class="pvbar"><button data-pv="raw">原图 / 原件</button><button data-pv="open">用默认程序打开</button></div>`;
+  const bar = `<div class="pvbar"><button data-pv="raw">原图 / 原件</button>`
+    + `<button data-pv="open">用看图软件打开</button>`
+    + `<button data-pv="pickviewer">指定看图软件…</button>`
+    + `<button data-pv="openas">换打开方式…</button></div>`;
   switch (it.preview) {
     case "model3d":
       return `<div class="pv v3dpv"><div id="pv3d" class="v3d">
@@ -366,12 +452,14 @@ function drawerActs(it) {
   a.push(["openas", "打开方式…", ""]);
   a.push(["reveal", "在资源管理器中定位", ""]);
   if (it.from === "lib") {
-    a.push(["export", "导出到文件夹…", ""]);
-    a.push(["copy", "复制（可到「浏览文件」里粘贴）", ""]);
+    a.push(["export", "复制到文件夹…", ""]);
+    a.push(["copy", "复制（到「浏览文件」里粘贴）", ""]);
     a.push(["fav", it.favorite ? "★ 取消收藏" : "☆ 收藏", "ghost"]);
     a.push(["rename", "重命名…", "ghost"]);
     if (it.inner || it.kind === "archive") a.push(["extract", "解压", "ghost"]);
   } else {
+    a.push(["export", "复制到文件夹…", ""]);
+    a.push(["moveto", "移动到文件夹…", "ghost"]);
     a.push(["copy", "复制", ""]);
     a.push(["cut", "剪切", ""]);
     a.push(["rename", "重命名…", "ghost"]);
@@ -414,7 +502,8 @@ async function openDrawer(it) {
     if (b.dataset.pv === "raw") {
       const im = $("#pvImg");
       if (im) { im.src = it.raw + (it.raw.includes("?") ? "&" : "?") + "t=" + Date.now(); toast("正在载入原图…"); }
-    } else doAct("open", it);
+    } else if (b.dataset.pv === "pickviewer") openViewerPicker();
+    else doAct(b.dataset.pv, it);
   });
   if (it.preview === "text") {
     try {
@@ -507,12 +596,13 @@ window.addEventListener("beforeunload", () => { try { stop3D(); } catch (e) {} }
 /* ---------------- 选择条与动作 ---------------- */
 const LIB_ACTS = [
   ["open", "打开", "primary"], ["openas", "打开方式", ""], ["reveal", "定位", ""],
-  ["export", "导出到文件夹…", ""], ["copy", "复制", ""], ["cut", "剪切", ""],
+  ["export", "复制到文件夹…", ""], ["copy", "复制", ""], ["cut", "剪切", ""],
   ["fav", "收藏", "ghost"], ["favoff", "取消收藏", "ghost"], ["rename", "批量重命名", "ghost"],
   ["extract", "解压", "ghost"], ["copyfull", "复制路径", "ghost"],
 ];
 const FS_ACTS = [
   ["open", "打开", "primary"], ["openas", "打开方式", ""], ["reveal", "定位", ""],
+  ["export", "复制到…", ""], ["moveto", "移动到…", ""],
   ["copy", "复制", ""], ["cut", "剪切", ""], ["paste", "粘贴到此处", ""],
   ["rename", "重命名", "ghost"], ["zip", "压缩为 zip", "ghost"], ["extract", "解压", "ghost"],
   ["recycle", "删除到回收站", "ghost"], ["newfolder", "新建文件夹", "ghost"], ["copyfull", "复制路径", "ghost"],
@@ -525,7 +615,8 @@ function renderSelActs() {
 async function quickAct(act, it) {
   if (act === "enter") return browse(it.path);
   if (act === "open" || act === "reveal") return doAct(act, it);
-  if (act === "export") return openExport([it.id]);
+  if (act === "export") return it.from === "lib" ? openExport([it.id]) : copyTo([it], false);
+  if (act === "moveto") return copyTo([it], true);
   if (act === "copy") return doAct("copy", it);
 }
 async function doAct(act, one) {
@@ -543,17 +634,30 @@ async function doAct(act, one) {
           : await api("/api/fs/open", { path: x.path, mode: act });
         if (r.ok) {
           ok++;
-          if (act === "open" && r.msg && r.msg !== "系统默认程序") progs.push(r.msg);
+          if (act === "open" && r.msg) progs.push(shortProg(r.msg));
         } else errs.push(r.msg || "失败");
       }
-      const why = errs.length ? "，" + errs[0] : "";
-      const prog = progs.length
-        ? "（" + shortProg(progs[0]) + (new Set(progs).size > 1 ? " 等" : "") + "）" : "";
-      toast(act === "reveal" ? `已在资源管理器中定位 ${ok} 项${why}` : `已打开 ${ok} 项${prog}${why}`,
+      const why = errs.length ? "：" + errs[0] : "";
+      const uniq = [...new Set(progs)];
+      const prog = uniq.length
+        ? "（" + uniq.slice(0, 2).join(" / ") + (uniq.length > 2 ? " 等" : "") + "）" : "";
+      const staged = ok && items.some(x => x.from === "lib" && x.inner)
+        ? "，压缩包里的文件已先取到暂存目录" : "";
+      toast(act === "reveal" ? `已在资源管理器中定位 ${ok} 项${why}`
+            : (ok ? `已打开 ${ok} 项${prog}${staged}${why}` : `打不开${why}`),
             ok ? "ok" : "err", errs.length ? 9000 : 4200);
       return;
     }
-    if (act === "export") { if (!ids.length) return toast("请选择素材库里的素材", "warn"); return openExport(ids); }
+    if (act === "export") {
+      if (fss.length && !libs.length) return copyTo(fss, false);
+      if (fss.length) return copyTo(fss, false);
+      if (!ids.length) return toast("请选择素材库里的素材", "warn");
+      return openExport(ids);
+    }
+    if (act === "moveto") {
+      if (!fss.length) return toast("请选择磁盘上的文件或文件夹", "warn");
+      return copyTo(fss, true);
+    }
     if (act === "copy" || act === "cut") {
       if (!items.length) return toast("先选中文件", "warn");
       let p = paths, tip = "";
@@ -565,15 +669,21 @@ async function doAct(act, one) {
       }
       const r = await api("/api/clip", { paths: p, mode: act === "cut" ? "move" : "copy" });
       S.clip = { paths: r.paths, mode: r.mode };
-      toast(`已${act === "cut" ? "剪切" : "复制"} ${r.ok} 项${tip}，切到「浏览文件」里 Ctrl+V 粘贴`, "ok", 6000);
+      toast(`已${act === "cut" ? "剪切" : "复制"} ${r.ok} 项${tip}。`
+            + `接着切到「浏览文件」打开目标文件夹，点工具栏的「粘贴」（或按 Ctrl+V）。`
+            + `想直接一步到位，也可以选中后点「复制到…」。`, "ok", 10000);
       return;
     }
     if (act === "paste") {
-      if (!S.dir) return toast("先打开一个文件夹", "warn");
+      if (!S.dir) return toast("先选一个目标文件夹：左边挑一个磁盘/文件夹，或点工具栏的「浏览…」", "warn", 9000);
+      const c = await api("/api/clip").catch(() => null) || S.clip;
+      S.clip = c;
+      if (!c.paths || !c.paths.length)
+        return toast("剪贴板是空的：先选中文件点「复制」或「剪切」，再回到目标文件夹里点「粘贴」", "warn", 9000);
       const r = await api("/api/fs/paste", { dest: S.dir });
-      if (r.errors && r.errors.length) return toast("粘贴失败：" + r.errors[0], "err");
+      if (r.errors && r.errors.length) return toast("粘贴不了：" + r.errors[0], "err", 8000);
       toast(`正在${r.mode === "move" ? "移动" : "复制"} ${r.ok} 项到当前文件夹…`, "ok");
-      pollJobs(true); setTimeout(() => browse(S.dir), 1200);
+      pollJobs(true); setTimeout(() => browse(S.dir), 1500);
       return;
     }
     if (act === "fav" || act === "favoff") {
@@ -623,6 +733,31 @@ async function mkdirPrompt() {
   if (r.ok) browse(S.dir);
 }
 function pickFolder(title) { return api("/api/pick-folder", { title }).then(r => r.path || "").catch(() => ""); }
+/* 复制 / 移动到指定文件夹：库内素材走导出，磁盘文件走系统复制 */
+async function copyTo(items, move) {
+  if (!items.length) return toast("先选中要" + (move ? "移动" : "复制") + "的东西", "warn");
+  const dest = await pickFolder(move ? "把这些移动到哪个文件夹？" : "复制到哪个文件夹？");
+  if (!dest) return;
+  const libs = items.filter(x => x.from === "lib"), fss = items.filter(x => x.from === "fs");
+  const verb = move ? "移动" : "复制";
+  let ok = 0, errs = [];
+  toast(`正在${verb}到 ${dest} …`, "ok", 2500);
+  try {
+    if (libs.length) {
+      const r = await api("/api/export", { ids: libs.map(x => x.id), dest, bundle: true });
+      ok += r.ok || 0;
+      if (r.errors && r.errors.length) errs = errs.concat(r.errors);
+    }
+    if (fss.length) {
+      const r = await api("/api/fs/copy", { paths: fss.map(x => x.path), dest, move });
+      if (r.errors && r.errors.length) errs = errs.concat(r.errors);
+      else { ok += r.ok || 0; pollJobs(true); }
+    }
+  } catch (e) { errs.push(e.message); }
+  toast(`${verb}到「${dest}」：成功 ${ok} 个${errs.length ? "，失败 " + errs.length + " 个：" + errs[0] : ""}`,
+        errs.length ? "warn" : "ok", errs.length ? 10000 : 6000);
+  if (S.mode === "browse" && S.dir) setTimeout(() => browse(S.dir), 1400);
+}
 async function openFsRename(items) {
   if (!items.length) return;
   modal(`<div class="mh"><span>重命名（${items.length} 项）</span><button class="ghost icon" data-close>×</button></div>
@@ -719,24 +854,67 @@ function modal(html) {
 }
 function closeModal() { $("#modal").classList.add("hidden"); $("#modalBox").innerHTML = ""; }
 
-async function openExport(ids) {
-  modal(`<div class="mh"><span>导出到文件夹（${ids.length} 项）</span><button class="ghost icon" data-close>×</button></div>
+async function openViewerPicker() {
+  let d = { items: [], current: "" };
+  try { d = await api("/api/viewers"); } catch (e) { /* ignore */ }
+  const items = d.items || [];
+  if (!items.length)
+    return toast("本机没扫到可用的看图软件。可以点图片上的「换打开方式…」，用 Windows 的对话框挑一个。", "warn", 9000);
+  modal(`<div class="mh"><span>选一个看图软件</span><button class="ghost icon" data-close>×</button></div>
     <div class="mb">
-      <div class="fld"><label>目标文件夹</label>
-        <div class="row"><input id="dest" style="flex:1" placeholder="例如 D:\\项目\\某小区\\素材">
-        <button class="btn" id="pick">浏览…</button></div></div>
-      <label class="chk" style="margin-top:10px"><input type="checkbox" id="bundle" checked> 同时导出压缩包内同目录的贴图 / 说明文件</label>
-      <div class="hint">文件名使用索引里整理过的名称（已去掉卖家广告词、修复乱码），并自动避免重名。<br>
-      导出后可直接用 SketchUp / 其它软件打开。压缩包内的文件会自动解出来。</div>
+      <div class="hint" style="margin-top:0">选好之后，图片都用它打开（「设置 → 文件关联」里也能改）。
+        找不到想用的？先点下面「自己选一个程序…」。</div>
+      ${items.map(it => `<div class="clrow"><span class="nm">${esc(it.name)}</span>
+        <span class="dim">${esc(it.exe)}${it.note ? " · " + esc(it.note) : ""}</span>
+        ${it.exe === d.current ? '<span class="pill">当前</span>' : ""}
+        <button class="btn primary sm" data-vw="${esc(it.exe)}">用这个</button></div>`).join("")}
+      <div class="dacts" style="margin-top:12px">
+        <button class="btn" id="vwBrowse">自己选一个程序…</button>
+        <button class="btn ghost" id="vwSys">跟 Windows 默认一致</button>
+      </div>
     </div>
-    <div class="mf"><button class="btn" data-close>取消</button><button class="btn primary" id="go">开始导出</button></div>`);
-  $("#pick").onclick = async () => { const p = await pickFolder("选择导出目标文件夹"); if (p) $("#dest").value = p; };
+    <div class="mf"><button class="btn" data-close>取消</button></div>`);
+  $$("#modalBox [data-vw]").forEach(b => b.onclick = async () => {
+    await api("/api/settings", { image_viewer: b.dataset.vw });
+    closeModal();
+    toast("看图软件设好了，点图片的「用看图软件打开」就能用。", "ok", 7000);
+    loadState();
+  });
+  $("#vwSys").onclick = async () => {
+    await api("/api/settings", { image_viewer: "" });
+    closeModal(); toast("已改成跟 Windows 默认一致", "ok", 6000); loadState();
+  };
+  $("#vwBrowse").onclick = async () => {
+    const p2 = await api("/api/pick-file", { title: "选一个看图软件（exe）", ext: ".exe" })
+      .then(r => r.path || "").catch(() => "");
+    if (!p2) return;
+    await api("/api/settings", { image_viewer: p2 });
+    closeModal(); toast("看图软件设好了：" + p2, "ok", 7000); loadState();
+  };
+}
+
+async function openExport(ids) {
+  const st = S.st || {};
+  const def = localStorage.getItem("xc_export_dest") || ((st.data_dir || "") + "\\导出");
+  modal(`<div class="mh"><span>复制到文件夹（${ids.length} 项）</span><button class="ghost icon" data-close>×</button></div>
+    <div class="mb">
+      <div class="fld"><label>目标文件夹（复制到这里）</label>
+        <div class="row"><input id="dest" style="flex:1" value="${esc(def)}" placeholder="例如 D:\\项目\\某小区\\素材">
+        <button class="btn" id="pick">浏览…</button></div></div>
+      <label class="chk" style="margin-top:10px"><input type="checkbox" id="bundle" checked> 连压缩包内同目录的贴图 / 说明文件一起复制</label>
+      <div class="hint">文件名用索引里整理过的名称（已去掉卖家广告词、修复乱码），重名会自动加序号。<br>
+      复制出来的文件可以直接用 SketchUp / 其它软件打开；压缩包里的文件会自动解出来。</div>
+    </div>
+    <div class="mf"><button class="btn" data-close>取消</button><button class="btn primary" id="go">开始复制</button></div>`);
+  $("#pick").onclick = async () => { const p = await pickFolder("复制到哪个文件夹？"); if (p) $("#dest").value = p; };
   $("#go").onclick = async () => {
     const dest = $("#dest").value.trim();
-    closeModal(); toast("正在导出…");
+    if (!dest) return toast("先点「浏览…」选一个目标文件夹", "warn", 8000);
+    closeModal(); toast(`正在复制到 ${dest} …`, "ok", 2500);
     const r = await api("/api/export", { ids, dest, bundle: $("#bundle") && $("#bundle").checked });
-    toast(`导出完成：成功 ${r.ok} 个${r.errors && r.errors.length ? "，失败 " + r.errors.length + " 个（" + r.errors[0] + "）" : ""}`,
-      r.errors && r.errors.length ? "warn" : "ok", 7000);
+    if (r.ok) localStorage.setItem("xc_export_dest", dest);
+    toast(`已复制到「${dest}」：成功 ${r.ok} 个${r.errors && r.errors.length ? "，失败 " + r.errors.length + " 个（" + r.errors[0] + "）" : ""}`,
+      r.errors && r.errors.length ? "warn" : "ok", 8000);
   };
 }
 
@@ -798,6 +976,11 @@ async function openSettings() {
   const st = S.st || await api("/api/state");
   const s = st.settings || {};
   const hist = await api("/api/rename/history").catch(() => ({ items: [] }));
+  const vw = st.viewer || {};
+  const vwPhotoOk = !!vw.photo_builtin;
+  const vwText = vw.kind === "photo" ? "Windows 自带的照片查看器"
+    : vw.kind === "exe" ? shortProg(vw.exe) + "（" + vw.exe + "）"
+    : "跟 Windows 默认一致（" + (vw.system_default || "未知") + "）";
   modal(`<div class="mh"><span>设置</span><button class="ghost icon" data-close>×</button></div>
     <div class="tabs">
       <button class="tab on" data-tab="tab1">常规</button>
@@ -853,6 +1036,14 @@ async function openSettings() {
         <span class="dim owtip">加完点右下角「保存设置」才会生效</span>
       </div>
       <div class="hint">常见对照：.skp → SketchUp　.psd → Photoshop　.dwg → CAD　.zip / .rar / .7z → 内嵌 7-Zip　.mp4 → 播放器<br>      规则按扩展名匹配（不分大小写）；程序路径失效会自动回退到 Windows 默认程序。</div>
+      <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:20px 0 8px">看图软件（图片通用，建议设一个）</h4>
+      <div class="hint" style="margin:0 0 10px">图片「打开」时用哪个软件，就看这里。设好之后，在小虫里点图片的「用看图软件打开」直接用它，
+        不会再出现「点了没反应」。<br>当前：<b>${esc(vwText)}</b></div>
+      <div class="dacts">
+        <button class="btn primary" id="vwPick">换一个看图软件…</button>
+        <button class="btn" id="vwAuto">跟 Windows 默认一致</button>
+        <button class="btn ghost" id="vwPhoto"${vwPhotoOk ? "" : " disabled"}>用 Windows 自带照片查看器</button>
+      </div>
       </section>
       <section id="tab3" class="hidden">
       <div class="dacts" style="margin-top:2px">
@@ -862,8 +1053,17 @@ async function openSettings() {
         <button class="btn ghost" id="cleanStage">清理预览/暂存缓存</button>
         <button class="btn ghost" id="cleanThumb">清理缩略图缓存</button>
         <button class="btn ghost" id="cleanNested">清理嵌套解压缓存</button>
+        <button class="btn" id="cleanPanel">清理缓存面板…</button>
         <button class="btn ghost" id="quit">退出程序</button>
       </div>
+      <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">定时提醒清理缓存</h4>
+      <label class="chk"><input type="checkbox" id="setRemind" ${s.cache_remind_on === false ? "" : "checked"}> 定时提醒我清理缓存</label>
+      <div class="fldrow" style="grid-template-columns:1fr 1fr">
+        <div class="fld"><label>隔多久提醒一次（分钟）</label><input id="setRmin" type="number" value="${+s.cache_remind_min || 60}"></div>
+        <div class="fld"><label>缓存超过多少 MB 才提醒</label><input id="setRmb" type="number" value="${+s.cache_limit_mb || 1500}"></div>
+      </div>
+      <div class="hint">当前缓存占用：<b>${fmtSize((st.cache || {}).total || 0)}</b>${(st.cache || {}).ready === false ? "（正在统计…）" : ""}
+        <button class="link" id="cleanOpen">打开清理面板</button></div>
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:16px 0 8px">重命名记录（可撤销）</h4>
       <div>${(hist.items || []).slice(0, 6).map(h =>
         `<div class="row" style="margin-bottom:6px"><span class="pill">${esc(h.batch)}</span>
@@ -925,6 +1125,17 @@ async function openSettings() {
     renderOw();
     toast(`已加 ${exts.length} 条，点「保存设置」生效`, "ok");
   };
+  $("#vwPick").onclick = () => openViewerPicker();
+  $("#vwAuto").onclick = async () => {
+    await api("/api/settings", { image_viewer: "" });
+    toast("已改成跟 Windows 默认一致", "ok", 6000); loadState(); closeModal(); openSettings();
+  };
+  $("#vwPhoto").onclick = async () => {
+    await api("/api/settings", { image_viewer: "@photoviewer" });
+    toast("已改成 Windows 自带照片查看器", "ok", 6000); loadState(); closeModal(); openSettings();
+  };
+  $("#cleanPanel").onclick = () => openClean();
+  $("#cleanOpen").onclick = () => openClean();
   $("#openData").onclick = () => api("/api/open-folder", { path: st.data_dir });
   $("#openThumb").onclick = () => api("/api/open-folder", { path: st.thumb_dir });
   $("#rebuild").onclick = () => { closeModal(); $("#btnScan").click(); };
@@ -937,8 +1148,12 @@ async function openSettings() {
       text_preview_kb: +$("#setTxt").value || 256,
       index_all_files: $("#setAll").checked, index_inside_archives: $("#setInArc").checked,
       index_images: $("#setImgOn").checked,
+      cache_remind_on: $("#setRemind").checked,
+      cache_remind_min: Math.max(5, +$("#setRmin").value || 60),
+      cache_limit_mb: Math.max(10, +$("#setRmb").value || 1500),
       open_with: ow,
     });
+    if ($("#setRemind").checked && s.cache_remind_on === false) localStorage.removeItem("xc_cache_remind_at");
     const idxChanged = ($("#setAll").checked !== !!s.index_all_files)
                     || ($("#setInArc").checked !== !!s.index_inside_archives)
                     || ($("#setImgOn").checked !== !!s.index_images);
@@ -987,6 +1202,7 @@ async function pollJobs(immediate) {
   } catch (e) { /* ignore */ }
 }
 setInterval(pollJobs, 4000);
+setInterval(() => checkCache(true), 5 * 60 * 1000);   // 每 5 分钟看一眼缓存，到点了就提醒
 
 /* ---------------- 工具条 ---------------- */
 function selectAll() {

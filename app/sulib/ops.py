@@ -483,3 +483,76 @@ def preview_dir_size() -> int:
                 except OSError:
                     pass
     return total
+
+# ----------------------------------------------------------------- 缓存统计
+# 缓存目录（清掉之后程序会自动重建）
+CACHE_ITEMS = (
+    ("stage", "预览 / 暂存缓存", "STAGE_DIR"),
+    ("thumbs", "缩略图缓存", "THUMB_DIR"),
+    ("nested", "嵌套解压缓存", "NESTED_DIR"),
+    ("model3d", "3D 看图缓存", "MODEL3D_DIR"),
+)
+_CACHE = {"data": None, "at": 0.0, "busy": False}
+_CACHE_TTL = 300.0
+_CACHE_LOCK = threading.Lock()
+
+
+def _tree_size(d):
+    total, files = 0, 0
+    for root, _, fs in os.walk(str(d)):
+        for f in fs:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+                files += 1
+            except OSError:
+                pass
+    return total, files
+
+
+def _measure_cache():
+    out, total = {}, 0
+    for key, label, attr in CACHE_ITEMS:
+        path = getattr(config, attr)
+        sz, n = _tree_size(path)
+        out[key] = {"size": sz, "files": n, "label": label, "path": str(path)}
+        total += sz
+    out["total"] = total
+    return out
+
+
+def _refresh_cache():
+    try:
+        data = _measure_cache()
+        with _CACHE_LOCK:
+            _CACHE["data"] = data
+            _CACHE["at"] = time.time()
+    except Exception:
+        pass
+    finally:
+        with _CACHE_LOCK:
+            _CACHE["busy"] = False
+
+
+def cache_stats(force: bool = False) -> dict:
+    """缓存占用（后台线程统计 + 5 分钟结果缓存，避免每次轮询都遍历几万个文件）。"""
+    now = time.time()
+    with _CACHE_LOCK:
+        data, at, busy = _CACHE["data"], _CACHE["at"], _CACHE["busy"]
+        need = force or data is None or (now - at) > _CACHE_TTL
+        start = bool(need and not busy)
+        if start:
+            _CACHE["busy"] = True
+    if start:
+        threading.Thread(target=_refresh_cache, daemon=True).start()
+    if data is None:
+        return {"ready": False, "total": 0, "age": 0}
+    d = dict(data)
+    d["ready"] = True
+    d["age"] = int(now - at)
+    return d
+
+
+def invalidate_cache_stats():
+    """清理之后让体积重新统计一次。"""
+    with _CACHE_LOCK:
+        _CACHE["at"] = 0.0

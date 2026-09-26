@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "小虫管理器"
 APP_SUB = "本地资源管理器 · 素材库"
 APP_EN = "XiaoChongManager"
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 
 # ----------------------------------------------------------------- 路径
 def _app_dir() -> Path:
@@ -187,6 +187,12 @@ DEFAULTS = {
     "sketchup_exe": "",
     # 每种扩展名单独指定打开程序：{".psd": "C:\\...\\Photoshop.exe"}，空 = 用系统默认
     "open_with": {},
+    # 看图软件：所有图片类型通用；空 = 用系统默认；"@photoviewer" = 用 Windows 自带的照片查看器
+    "image_viewer": "",
+    # 定时提醒清理缓存
+    "cache_remind_on": True,
+    "cache_remind_min": 60,
+    "cache_limit_mb": 1500,
 }
 
 

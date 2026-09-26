@@ -105,11 +105,15 @@ def api_state():
         "sketchup": fsops.sketchup_exe(),
         "sketchup_assoc": fsops.assoc_target(".skp"),
         "open_with": _open_with_list(cfg),
+        "viewer": fsops.viewer_status(),
+        "cache": ops.cache_stats(),
         "ffmpeg": cfg.get("ffmpeg") or "",
         "settings": {k: cfg.get(k) for k in ("thumb_max_px", "workers", "index_images",
                                             "image_max_mb", "index_all_files",
                                             "index_inside_archives", "max_file_mb",
-                                            "text_preview_kb", "sketchup_exe")},
+                                            "text_preview_kb", "sketchup_exe",
+                                            "image_viewer", "cache_remind_on",
+                                            "cache_remind_min", "cache_limit_mb")},
         "disk_free": ops.disk_free(str(config.DATA_DIR)),
         "scanning": STATE["scanning"],
         "scanning_stats": STATE["last_stats"],
@@ -619,6 +623,15 @@ def api_assoc(ext: str = ""):
     return fsops.system_default(ext)
 
 
+@app.get("/api/viewers")
+def api_viewers():
+    """本机能用的看图软件候选（给「指定看图软件」用）。"""
+    return {"items": fsops.viewer_candidates(),
+            "current": fsops.image_viewer_spec()[1] if fsops.image_viewer_spec()[0] == "exe"
+                       else (fsops.PHOTO_VIEWER_ID if fsops.image_viewer_spec()[0] == "photo" else ""),
+            "status": fsops.viewer_status()}
+
+
 def _open_with_list(cfg) -> list:
     """设置面板用：[{ext, exe, ok}]，ok = 那个程序还在不在。"""
     rules = cfg.get("open_with") or {}
@@ -645,7 +658,8 @@ def api_settings(payload: dict = Body(...)):
     cfg = config.load()
     for k in ("seven_zip", "ffmpeg", "thumb_max_px", "workers", "index_images",
               "image_max_mb", "index_all_files", "index_inside_archives", "max_file_mb",
-              "text_preview_kb", "sketchup_exe"):
+              "text_preview_kb", "sketchup_exe", "image_viewer",
+              "cache_remind_on", "cache_remind_min", "cache_limit_mb"):
         if k in payload:
             cfg[k] = payload[k]
     if "open_with" in payload:
@@ -931,6 +945,8 @@ def api_cleanup(payload: dict = Body(default={})):
         db.ex("UPDATE assets SET thumb_status='pending'")
     if what in ("thumbs", "all"):
         db.ex("UPDATE assets SET thumb_status='pending', thumb_key=''")
+    ops.invalidate_cache_stats()
+    ops.cache_stats(force=True)
     return {"ok": True, "freed": freed, "msg": f"已释放 {freed / 1048576:.0f} MB"}
 
 
