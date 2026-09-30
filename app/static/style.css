@@ -118,12 +118,6 @@ button,input,select{font:inherit;color:inherit}
 .card .favbtn:hover{background:rgba(17,24,39,.78);color:#fff;transform:scale(1.1)}
 .card .favbtn.fav-on{background:rgba(255,255,255,.94);color:#f59e0b;text-shadow:0 1px 2px rgba(146,64,14,.32)}
 .card .favbtn.fav-on:hover{background:#fff;color:#d97706}
-.card .quick{position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(17,24,39,.78));
-  display:flex;gap:6px;justify-content:flex-end;padding:16px 7px 7px;opacity:0;transition:.14s}
-.card:hover .quick{opacity:1}
-.quick button{border:0;background:rgba(255,255,255,.94);border-radius:6px;padding:3px 8px;font-size:11.5px;
-  cursor:pointer}
-.quick button:hover{background:#fff;color:var(--ac)}
 .sentinel{height:1px}
 .empty{padding:60px 20px;text-align:center;color:var(--dim);font-size:13px}
 
@@ -337,7 +331,44 @@ table.pv-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:1
 .clsec .clrow .nm{min-width:190px}
 .clsec .clrow input[type=checkbox]{width:15px;height:15px;flex:none;accent-color:var(--ac);cursor:pointer}
 
-/* 图片不显示缩略图时，卡片上那个「点开看原图」的格子 */
+/* 卡片上的那个「点开看原图」的大格子已经改成下面的紧凑列表行 */
 .card .thumb.nothumb{background:linear-gradient(160deg,#f8f9fb,#eceff4)}
 .card .thumb.nothumb .ph{font-size:11.5px;color:#98a1ae;gap:2px;text-align:center;line-height:1.55}
 .card .thumb.nothumb .nti{font-size:30px;display:block;filter:saturate(.85)}
+
+/* 没有缩略图可显示的卡片：紧凑列表行 —— 小图标在左，名字和说明在右，
+   一行一个，一屏能扫一堆文件名（图片关了缩略图、或总开关关掉时用） */
+.card.row{grid-column:1/-1;flex-direction:row;align-items:center;gap:10px;padding:7px 10px;border-radius:9px}
+.card.row:hover{transform:none}
+.card.row .ric{flex:0 0 auto;width:30px;height:30px;display:grid;place-items:center;font-size:17px;
+  line-height:1;background:#f2f3f6;border-radius:8px;filter:saturate(.9)}
+.card.row .rmeta{flex:1 1 auto;min-width:0}
+.card.row .rname{font-size:13px;line-height:1.35;color:var(--tx);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.card.row .rsub{display:flex;gap:7px;align-items:center;margin-top:2px;font-size:11px;color:var(--dim);
+  overflow:hidden;white-space:nowrap}
+.card.row .rsub .c{background:#f2f3f6;border-radius:4px;padding:1px 5px;color:#4b5563;flex:0 0 auto}
+.card.row .rsub .o{overflow:hidden;text-overflow:ellipsis}
+.card.row .badge{position:static;flex:0 0 auto;background:#eef0f3;color:#5b6472;border-radius:5px;
+  padding:2px 6px;font-size:10.5px;letter-spacing:.03em}
+.card.row .favbtn{position:static;flex:0 0 auto;width:26px;height:26px;background:transparent;
+  color:#c6ccd4;text-shadow:none;backdrop-filter:none}
+.card.row .favbtn:hover{background:#f2f3f6;color:#d97706;transform:scale(1.06)}
+.card.row .favbtn.fav-on{background:transparent;color:#f59e0b}
+
+/* ---------- 鼠标右键菜单（二级菜单） ---------- */
+.ctxmenu{position:fixed;z-index:70;min-width:196px;background:#fff;border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 14px 36px rgba(15,23,42,.18);padding:5px;font-size:12.5px;
+  color:var(--tx);user-select:none}
+.ctxmenu .ctxhd{padding:4px 9px 6px;color:var(--dim);font-size:11px;border-bottom:1px solid var(--line2);
+  margin-bottom:4px}
+.ctxmenu .mi{position:relative;padding:6px 10px;border-radius:6px;cursor:pointer;white-space:nowrap;
+  display:flex;align-items:center;justify-content:space-between;gap:16px;line-height:1.35}
+.ctxmenu .mi:hover{background:var(--ac-soft);color:var(--ac)}
+.ctxmenu .msep{height:1px;background:var(--line2);margin:4px 6px}
+.ctxmenu .ar{color:var(--dim);font-size:13px;line-height:1}
+.ctxmenu .msub{display:none;position:absolute;left:100%;top:-6px;margin-left:3px;min-width:176px;
+  background:#fff;border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 14px 36px rgba(15,23,42,.18);padding:5px;z-index:71}
+.ctxmenu .mi.hasSub:hover .msub{display:block}
+.ctxmenu .mi.hasSub:hover{background:var(--ac-soft)}

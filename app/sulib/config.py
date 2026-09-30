@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "小虫管理器"
 APP_SUB = "本地资源管理器 · 素材库"
 APP_EN = "XiaoChongManager"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 # ----------------------------------------------------------------- 路径
 def _app_dir() -> Path:

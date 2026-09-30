@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小虫管理器 · 本地资源管理器</title>
 <link rel="icon" href="/static/小虫.ico">
-<link rel="stylesheet" href="/static/style.css?v=2.4.0">
+<link rel="stylesheet" href="/static/style.css?v=2.5.0">
 </head>
 <body>
 <header class="topbar">
@@ -70,6 +70,7 @@
       <div class="crumb" id="crumb">全部素材</div>
       <div class="tools">
         <label class="chk"><input type="checkbox" id="onlyRender"> 只看带效果图</label>
+        <label class="chk" title="勾上 = 图片也生成并显示缩略图（补旧图请点右上角「生成缩略图」）；不勾 = 图片走文字列表，点开看原图"><input type="checkbox" id="tbImgThumb"> 图片显示缩略图</label>
         <select id="sort">
           <option value="category">按分类</option>
           <option value="name">按名称 A→Z</option>
@@ -130,6 +131,6 @@
 <div id="toasts" class="toasts"></div>
 <div id="jobs" class="jobs hidden"></div>
 
-<script src="/static/app.js?v=2.4.0"></script>
+<script src="/static/app.js?v=2.5.0"></script>
 </body>
 </html>

@@ -241,6 +241,8 @@ async function loadState() {
     CACHE.info = st.cache;
     if (!CACHE.ticked) { CACHE.ticked = 1; checkCache(false); }
   }
+  const tb = $("#tbImgThumb");
+  if (tb) tb.checked = !!(st.settings && st.settings.image_thumbs);
   return st;
 }
 
@@ -329,8 +331,36 @@ function imgNoThumb(it) {
 // 卡片上到底显不显示缩略图：总开关关掉，或者这张是图片而且没开图片缩略图
 function cardNoThumb(it) {
   const st = (S.st && S.st.settings) || {};
-  if (st.show_thumbs === false) return true;
+  if (st.show_thumbs === false) return true;   // 总开关关掉：连文件夹也走文字列表
+  if (it.is_dir) return false;                 // 文件夹本来就只看图标
   return imgNoThumb(it);
+}
+// 没有缩略图可显示的卡片（图片关了缩略图、或总开关关掉）走紧凑列表行：
+// 小图标在左，文件名和说明在右 —— 一屏能扫一堆名字，方便挑要打开哪个
+const ROW_ICON = { model: "🧊", image: "🖼", psd: "🖼", cad: "📐", archive: "🗜",
+  video: "🎬", audio: "🎵", doc: "📄", code: "📜", app: "⚙", other: "📄" };
+function rowHtml(it, on) {
+  const st = (S.st && S.st.settings) || {};
+  const withPath = !!st.show_path && !it.is_dir;
+  const fullPath = it.from === "lib" ? (it.source_path || "") : (it.path || "");
+  const fullName = it.filename || it.name || "";
+  const pathTxt = fullPath + (it.inner ? "  ↳ " + it.inner : "");
+  const icon = it.is_dir ? (it.kind === "drive" ? "💽" : "📁") : (ROW_ICON[it.kind] || "📄");
+  const right = withPath ? pathTxt
+    : it.from === "lib" ? [it.category, it.origin || it.folder].filter(Boolean).join(" · ")
+    : (it.is_dir ? "文件夹" : fmtSize(it.size)) + " · " + fmtTime(it.mtime);
+  const left = withPath ? (it.is_dir ? "文件夹" : fmtSize(it.size))
+    : (it.is_dir ? "文件夹" : kindLabel(it.kind));
+  const title = withPath ? fullName + "\n" + pathTxt : (it.name || "");
+  return `<div class="card row${on}" data-key="${esc(it.key)}" title="${esc(title)}">
+    <span class="ric">${icon}</span>
+    <div class="rmeta">
+      <div class="rname">${esc(withPath ? fullName : it.name)}</div>
+      <div class="rsub"><span class="c">${esc(left)}</span><span class="o" title="${esc(right)}">${esc(right)}</span></div>
+    </div>
+    ${it.is_dir ? "" : `<span class="badge">${esc((it.ext || "").replace(".", "").toUpperCase() || "文件")}</span>`}
+    ${it.is_dir ? "" : `<button class="favbtn${it.favorite ? " fav-on" : ""}" data-fav="1" title="${it.favorite ? "取消收藏" : "收藏到我的收藏"}">${it.favorite ? "★" : "☆"}</button>`}
+  </div>`;
 }
 // 卡片上要不要写「真实文件名 + 所在文件夹的完整地址」
 function showPathOn() {
@@ -348,11 +378,10 @@ function redrawCards() {
 const IMG_DIRECT = /\.(jpe?g|jfif|png|bmp|gif|webp|ico|avif|svg)$/i;
 function cardHtml(it) {
   const on = S.sel.has(it.key) ? " sel" : "";
+  if (cardNoThumb(it)) return rowHtml(it, on);   // 没缩略图可看：走紧凑列表行
   const badge = it.is_dir ? "" : `<span class="badge">${esc((it.ext || "").replace(".", "").toUpperCase() || "文件")}</span>`;
   const thumb = it.is_dir
     ? `<div class="thumb ${it.kind === "drive" ? "drive" : "folder"}"><span class="fi">${it.kind === "drive" ? "💽" : "📁"}</span></div>`
-    : cardNoThumb(it)
-    ? `<div class="thumb nothumb"><span class="ph"><span class="nti">${it.kind === "image" ? "🖼" : "📄"}</span>${esc(kindLabel(it.kind))}　${it.kind === "image" ? "点开看原图" : "点开看"}</span>${badge}</div>`
     : `<div class="thumb"><img src="${it.thumb}" loading="lazy" onload="this.dataset.ok='1'" onerror="this.remove()" alt=""><span class="ph">${esc(kindLabel(it.kind))}</span>
         ${["image", "psd", "model"].includes(it.kind) ? "" : `<span class="kindtag">${esc(kindLabel(it.kind))}</span>`}${badge}</div>`;
   const favBtn = it.is_dir ? ""
@@ -366,12 +395,10 @@ function cardHtml(it) {
     : it.from === "lib"
     ? `${it.category ? `<span class="c">${esc(it.category)}</span>` : ""}<span class="o" title="${esc(it.origin || "")}">${esc(it.origin || it.folder || "")}</span>`
     : `${it.is_dir ? `<span class="c">文件夹</span>` : `<span class="c">${esc(fmtSize(it.size))}</span>`}<span class="o">${esc(fmtTime(it.mtime))}</span>`;
-  const quick = `<div class="quick"><button data-q="open">打开</button><button data-q="reveal">定位</button>
-      <button data-q="export">复制到…</button>${it.is_dir ? "" : `<button data-q="copy">复制</button>`}</div>`;
   return `<div class="card${on}" data-key="${esc(it.key)}">
     ${thumb}${favBtn}${it.kind === "model" ? `<span class="tag3d">3D</span>` : ""}
     <div class="meta"><div class="name" title="${esc(withPath ? (fullName + "\n" + pathTxt) : it.name)}">${esc(withPath ? fullName : it.name)}</div><div class="sub${withPath ? " pathmode" : ""}">${sub}</div></div>
-    ${quick}</div>`;
+    </div>`;
 }
 function bindCards(scope = "#grid") {
   $$(scope + " .card").forEach(c => {
@@ -398,6 +425,91 @@ function bindCards(scope = "#grid") {
   });
 }
 const it2 = key => S.map[key] || (S.mode === "lib" ? S.items : S.dirItems).find(x => x.key === key);
+
+/* ---------------- 鼠标右键菜单（二级菜单） ----------------
+   卡片上的「打开 / 定位 / 复制」按钮全部收进这里：在卡片上点右键弹出来，
+   想选别的程序就进「打开方式 ▸」那个二级菜单。 */
+let ctxBox = null;
+function closeCtx() { if (ctxBox) { ctxBox.remove(); ctxBox = null; } }
+function ctxMenuFor(it, many) {
+  const lib = it.from === "lib", n = S.sel.size, R = [];
+  const add = (act, label) => R.push({ act, label });
+  const sep = () => { if (R.length && !R[R.length - 1].sep) R.push({ sep: 1 }); };
+  add("open", many ? `用默认程序打开这 ${n} 项` : "打开");
+  const subs = [{ act: "open", label: "用默认程序打开" },
+                { act: "openas", label: "打开方式…（自己挑程序）" }];
+  if (!many && it.kind === "image") subs.push({ act: "__viewer", label: "指定看图软件…" });
+  R.push({ label: "打开方式", children: subs });
+  add("reveal", "在资源管理器中定位");
+  sep();
+  add("copy", many ? `复制这 ${n} 项（到「浏览文件」里粘贴）` : "复制（到「浏览文件」里粘贴）");
+  add("export", "复制到文件夹…");
+  if (!lib) add("moveto", "移动到文件夹…");
+  if (!lib) add("cut", "剪切");
+  add("copyfull", "复制完整路径");
+  sep();
+  if (many) {
+    add("fav", "☆ 收藏 / ★ 取消收藏（这些）");
+    add("rename", "批量重命名…");
+    add("extract", "解压选中的压缩包");
+  } else {
+    add("fav", it.favorite ? "★ 取消收藏" : "☆ 收藏到我的收藏");
+    add("rename", "重命名…");
+    if (it.inner || it.kind === "archive") add("extract", "解压…");
+    if (!lib && it.is_dir) add("enter", "进入该文件夹");
+    if (!lib && it.is_dir) add("paste", "粘贴到此处");
+    if (!lib && !it.is_dir) add("zip", "压缩为 zip");
+    if (!lib) add("recycle", "删除到回收站");
+  }
+  sep();
+  add("__all", "全选本页");
+  add("__none", "取消选择");
+  return R;
+}
+function ctxHtml(rows) {
+  return rows.map(r => {
+    if (r.sep) return '<div class="msep"></div>';
+    if (r.children)
+      return `<div class="mi hasSub">${esc(r.label)}<span class="ar">›</span>
+        <div class="msub">${r.children.map(c => `<div class="mi" data-ctx="${esc(c.act)}">${esc(c.label)}</div>`).join("")}</div></div>`;
+    return `<div class="mi" data-ctx="${esc(r.act)}">${esc(r.label)}</div>`;
+  }).join("");
+}
+function openCtx(x, y, it) {
+  closeCtx();
+  const many = S.sel.size > 1 && S.sel.has(it.key);
+  ctxBox = document.createElement("div");
+  ctxBox.className = "ctxmenu";
+  ctxBox.innerHTML = (many ? `<div class="ctxhd">已选 ${S.sel.size} 项，下面的动作都作用于它们</div>` : "")
+    + ctxHtml(ctxMenuFor(it, many));
+  document.body.appendChild(ctxBox);
+  const r = ctxBox.getBoundingClientRect();
+  ctxBox.style.left = Math.max(6, Math.min(x, innerWidth - r.width - 8)) + "px";
+  ctxBox.style.top = Math.max(6, Math.min(y, innerHeight - r.height - 8)) + "px";
+  ctxBox.onclick = e => {
+    const mi = e.target.closest(".mi[data-ctx]");
+    if (!mi) return;
+    const act = mi.dataset.ctx;
+    closeCtx();
+    if (act === "__all") return selectAll();
+    if (act === "__none") { S.sel.clear(); S.map = {}; syncSel(); return; }
+    if (act === "__viewer") return openViewerPicker();
+    doAct(act, many ? undefined : it);
+  };
+}
+$("#grid").addEventListener("contextmenu", e => {
+  const c = e.target.closest(".card");
+  if (!c) return;
+  const it = it2(c.dataset.key);
+  if (!it) return;
+  e.preventDefault();
+  if (!S.sel.has(it.key)) { S.sel.clear(); S.sel.add(it.key); S.map[it.key] = it; syncSel(); }
+  openCtx(e.clientX, e.clientY, it);
+});
+document.addEventListener("click", e => { if (ctxBox && !ctxBox.contains(e.target)) closeCtx(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeCtx(); });
+window.addEventListener("resize", closeCtx);
+$("#grid").addEventListener("scroll", closeCtx);
 function syncSel() {
   $$("#grid .card").forEach(c => c.classList.toggle("sel", S.sel.has(c.dataset.key)));
   $("#selbar").classList.toggle("hidden", S.sel.size === 0);
@@ -1223,15 +1335,14 @@ async function openSettings() {
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">列表卡片显示</h4>
       <label class="chk"><input type="checkbox" id="setThumbs" ${s.show_thumbs === false ? "" : "checked"}>
         显示缩略图（总开关）</label>
-      <label class="chk"><input type="checkbox" id="setImgThumb" ${s.image_thumbs ? "checked" : ""}>
-        图片显示缩略图</label>
       <label class="chk"><input type="checkbox" id="setShowPath" ${s.show_path ? "checked" : ""}>
         显示文件地址和名字</label>
       <div class="hint" style="margin:0 0 14px">
-        · <b>显示缩略图</b>：不勾 = 所有卡片都不显示缩略图，只写文字，翻页更快（只是不显示，缓存照旧管）。<br>
-        · <b>图片显示缩略图</b>：不勾（默认）= 图片不生成也不显示缩略图，卡片点开直接看原图，省缓存也不用等。<br>
-        · 图片想看到缩略图，把上面<b>两个都勾上</b>。<br>
-        · <b>显示文件地址和名字</b>：勾上 = 卡片上写真实文件名和它所在的完整文件夹，方便在硬盘里找。</div>
+        · <b>显示缩略图</b>：不勾 = 所有卡片都变成文字列表（小图标 + 文件名），翻得快也好找；
+          只是不显示，缓存照旧管着，再勾回来立刻恢复。<br>
+        · <b>图片显示缩略图</b>：已经挪到列表工具栏，「只看带效果图」旁边，勾一下立刻生效。<br>
+        · <b>显示文件地址和名字</b>：勾上 = 卡片上写真实文件名和它所在的完整文件夹，方便在硬盘里找。<br>
+        · 用鼠标在卡片上<b>点右键</b>：打开 / 打开方式 / 定位 / 复制 / 重命名 / 解压 都在那个菜单里。</div>
       </section>
       <section id="tab2" class="hidden">
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">文件类型默认程序</h4>
@@ -1392,7 +1503,6 @@ async function openSettings() {
       cache_remind_min: Math.max(5, +$("#setRmin").value || 60),
       cache_limit_mb: Math.max(10, +$("#setRmb").value || 1500),
       close_action: (document.querySelector('input[name="closeAct"]:checked') || {}).value || "tray",
-      image_thumbs: $("#setImgThumb").checked,
       show_thumbs: $("#setThumbs").checked,
       show_path: $("#setShowPath").checked,
       open_with: ow,
@@ -1402,11 +1512,9 @@ async function openSettings() {
     const idxChanged = ($("#setAll").checked !== !!s.index_all_files)
                     || ($("#setInArc").checked !== !!s.index_inside_archives)
                     || ($("#setImgOn").checked !== !!s.index_images);
-    const imgThumbChanged = ($("#setImgThumb").checked !== !!s.image_thumbs);
     const showChanged = ($("#setThumbs").checked !== (s.show_thumbs !== false))
                      || ($("#setShowPath").checked !== !!s.show_path);
     toast("设置已保存" + (idxChanged ? "，索引选项改动要重新扫描才生效" : "")
-      + (imgThumbChanged ? "；图片缩略图已按新设置调整（不用重扫）" : "")
       + (showChanged ? "；卡片显示方式已更新" : ""), "ok");
     await loadState();
     if (showChanged) redrawCards();
@@ -1473,6 +1581,18 @@ $("#q").oninput = e => { S.q = e.target.value; onSearch(); };
 $("#qclear").onclick = () => { $("#q").value = ""; S.q = ""; S.mode === "lib" ? reload() : renderBrowse(); };
 $("#sort").onchange = e => { S.sort = e.target.value; S.offset = 0; reload(); };
 $("#onlyRender").onchange = e => { S.onlyRender = e.target.checked ? 1 : 0; S.offset = 0; reload(); };
+// 图片缩略图开关（就在「只看带效果图」旁边）：勾了图片才生成/显示缩略图，不勾就出文字列表、点开看原图
+$("#tbImgThumb").onchange = async e => {
+  const on = e.target.checked;
+  try { await api("/api/settings", { image_thumbs: on }); }
+  catch (err) { e.target.checked = !on; return toast("保存失败：" + err.message, "err"); }
+  if (S.st && S.st.settings) S.st.settings.image_thumbs = on;
+  toast(on
+    ? "图片缩略图已打开：翻到哪张就补哪张。想一次性全生成，点右上角「生成缩略图」。"
+    : "图片缩略图已关闭：图片改成文字列表，点开直接看原图，省缓存也更快。", "ok", 9000);
+  if (S.mode === "lib") reload(); else renderBrowse();
+  loadState();
+};
 function setZoom(v) {
   document.documentElement.style.setProperty("--card", v + "px");
   $("#zoom").value = v; $("#zoom2").value = v;

@@ -31,7 +31,7 @@ DIST = os.path.join(HERE, "dist")
 EXTRA = os.path.join(HERE, "extra")
 OUTPUT_DIR = os.environ.get("XC_OUT") or os.path.join(HERE, "安装包")
 APP_NAME = "小虫管理器"
-APP_VER = "1.2.1"
+APP_VER = "1.2.2"
 def _find_iscc() -> str:
     """找 Inno Setup 6 的编译器（装在哪都可能）。"""
     for p in (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
