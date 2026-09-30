@@ -31,7 +31,7 @@ DIST = os.path.join(HERE, "dist")
 EXTRA = os.path.join(HERE, "extra")
 OUTPUT_DIR = os.environ.get("XC_OUT") or os.path.join(HERE, "安装包")
 APP_NAME = "小虫管理器"
-APP_VER = "1.1.9"
+APP_VER = "1.2.0"
 def _find_iscc() -> str:
     """找 Inno Setup 6 的编译器（装在哪都可能）。"""
     for p in (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
@@ -120,10 +120,16 @@ README = """小虫管理器 %s —— 使用说明
              也可以在「设置 → SketchUp 程序路径」里手动指定）。找不到时给出中文
              提示而不是报错，且仍可以用内置 3D 看图直接看模型。
     · 压缩包里的 .skp 也能直接 3D 预览（zip 直读；rar/7z 先「解压」取出即可）。
+    · 打开 .dwg / .dxf：自动用本机装好的「CAD 快速看图」（在常见安装目录和系统关联
+              里找）；本机没装就照旧走 Windows 默认程序。「设置 → 文件关联」里能看到
+              它认到了哪个程序，也能单独改成别的。
 
 七、常见问题
     · 视频 / 音频缩略图需要 ffmpeg（可选，没有也不影响其它功能）。
     · 「设置」里可调缩略图尺寸、并行线程、索引选项，以及素材目录。
+    · 图片（.jpg / .png 这类）默认不生成也不显示缩略图：列表里图片只占一个
+      「点开看原图」的格子，点开在右侧直接看原图 —— 更清楚，也不用等生成、不占缓存。
+      想恢复成显示缩略图：设置 → 常规 → 勾上「图片显示缩略图」（勾完无需重扫）。
     · 首次启动若素材库是空的，程序会自动在后台扫描一次。
     · 双击 .skp 提示「找不到 SketchUp」：说明本机没装 SketchUp，或者装得不完整
       （系统关联指向的 SketchUp.exe 不存在）。到「设置」里手动填上 SketchUp.exe

@@ -473,6 +473,7 @@ _FRIENDLY_NAMES = {
     "acdsee": "ACDSee", "honeyview": "Honeyview", "irfanview": "IrfanView",
     "xnview": "XnView", "jpegview": "JPEGView", "photos": "Windows 照片",
     "rundll32": "Windows 照片查看器",
+    "cadreader": "CAD快速看图", "cadreader-editor": "CAD快速看图（编辑器）",
 }
 
 
@@ -618,10 +619,50 @@ def custom_program(ext: str) -> str:
     return exe if exe and os.path.isfile(exe) else ""
 
 
+# ------------------------------------------------- 内置默认程序（开箱即用）
+# 「CAD 快速看图」的常见安装位置：.dwg 这类图纸默认就用它打开
+CAD_READER_CANDIDATES = (
+    r"C:\Program Files (x86)\CADReader\CADReader.exe",
+    r"C:\Program Files\CADReader\CADReader.exe",
+    r"D:\Program Files (x86)\CADReader\CADReader.exe",
+    r"D:\Program Files\CADReader\CADReader.exe",
+    r"D:\CADReader\CADReader.exe",
+)
+CAD_EXT = (".dwg", ".dxf", ".dwt", ".dwf")
+
+
+def cad_reader_exe() -> str:
+    """找「CAD 快速看图」主程序：先看常见安装目录，再看注册表里 .dwg 登记的程序。"""
+    for c in CAD_READER_CANDIDATES:
+        if os.path.isfile(c):
+            return c
+    for ext in (".dwg", ".dxf"):
+        for e in _assoc_exes(ext):
+            if os.path.basename(e).lower() == "cadreader.exe" and os.path.isfile(e):
+                return e
+    return ""
+
+
+def builtin_program(ext: str) -> str:
+    """内置认的默认程序：CAD 图纸 → CAD 快速看图（本机没装就返回空，回落到系统默认）。"""
+    if config.norm_ext(ext) in CAD_EXT:
+        return cad_reader_exe()
+    return ""
+
+
+def builtin_open_with() -> list:
+    """给设置界面显示用：内置默认程序现在认到哪个程序；没认到就返回空列表。"""
+    exe = cad_reader_exe()
+    if not exe:
+        return []
+    return [{"ext": ".dwg", "exts": list(CAD_EXT),
+             "name": friendly_name(exe) or "CAD 快速看图", "exe": exe}]
+
+
 def program_for(path: str) -> str:
-    """打开某个文件该用哪个程序：自定义规则 > 看图软件(图片) > .skp 用 SketchUp > 空(交给系统)。"""
+    """打开某个文件该用哪个程序：自定义规则 > 内置默认 > 看图软件 > .skp 用 SketchUp > 空。"""
     ext = config.ext_of(path)
-    exe = custom_program(ext)
+    exe = custom_program(ext) or builtin_program(ext)
     if exe:
         return exe
     if ext in config.IMAGE_EXT and image_viewer_spec()[0] == "exe":
@@ -691,8 +732,8 @@ def open_with_default(path: str) -> tuple:
     if not os.path.isfile(p):
         return False, "文件不存在：" + p
     ext = config.ext_of(p)
-    # ① 用户在「设置 → 文件关联」里为这个扩展名单独指定的程序
-    exe = custom_program(ext)
+    # ① 用户单独指定的程序 → 其次是内置认的（.dwg 这类图纸用 CAD 快速看图）
+    exe = custom_program(ext) or builtin_program(ext)
     if exe:
         return _launch_exe(exe, p)
     # ② 图片：看用户指定的看图软件

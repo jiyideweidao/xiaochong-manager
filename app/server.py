@@ -106,6 +106,7 @@ def api_state():
         "sketchup": fsops.sketchup_exe(),
         "sketchup_assoc": fsops.assoc_target(".skp"),
         "open_with": _open_with_list(cfg),
+        "builtin_open_with": fsops.builtin_open_with(),
         "viewer": fsops.viewer_status(),
         "cache": ops.cache_stats(),
         "ffmpeg": cfg.get("ffmpeg") or "",
@@ -115,7 +116,8 @@ def api_state():
                                             "text_preview_kb", "sketchup_exe",
                                             "image_viewer", "cache_remind_on",
                                             "cache_remind_once", "cache_remind_min",
-                                            "cache_limit_mb", "close_action")},
+                                            "cache_limit_mb", "close_action",
+                                            "image_thumbs")},
         "disk_free": ops.disk_free(str(config.DATA_DIR)),
         "scanning": STATE["scanning"],
         "scanning_stats": STATE["last_stats"],
@@ -396,6 +398,9 @@ def _run_prefetch(jid, kind="", ids=()):
         elif kind:
             where.append("kind = ?")
             args.append(kind)
+        elif not bool(config.get("image_thumbs", False)):
+            # 没指定范围时跳过图片：按设置图片不生成缩略图（点开看原图）
+            where.append("kind <> 'image'")
         sql = ("SELECT * FROM assets WHERE " + " AND ".join(where) if where else
                "SELECT * FROM assets")
         sql += " ORDER BY CASE WHEN thumb_status='ok' THEN 1 ELSE 0 END,"
@@ -704,6 +709,17 @@ def api_settings(payload: dict = Body(...)):
     # 关窗口怎么办：tray = 隐藏到任务栏（托盘），quit = 直接退出程序
     if payload.get("close_action") in ("tray", "quit"):
         cfg["close_action"] = payload["close_action"]
+    # 图片缩略图：关掉就不再批量生成（卡片上点开看原图）；重新打开时
+    # 把之前标了 skip 的图片排回队列，「生成缩略图」会补上。
+    if "image_thumbs" in payload:
+        on = bool(payload["image_thumbs"])
+        cfg["image_thumbs"] = on
+        if on:
+            db.ex("UPDATE assets SET thumb_status='pending' WHERE kind='image' "
+                  "AND thumb_status='skip'")
+        else:
+            db.ex("UPDATE assets SET thumb_status='skip', thumb_msg='按设置不生成图片缩略图' "
+                  "WHERE kind='image' AND thumb_status<>'ok'")
     config.save(cfg)
     return {"ok": True, "settings": {k: cfg.get(k) for k in payload},
             "open_with": cfg.get("open_with") or {}}

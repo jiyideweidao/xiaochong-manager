@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "小虫管理器"
 APP_SUB = "本地资源管理器 · 素材库"
 APP_EN = "XiaoChongManager"
-APP_VERSION = "1.1.9"
+APP_VERSION = "1.2.0"
 
 # ----------------------------------------------------------------- 路径
 def _app_dir() -> Path:
@@ -199,6 +199,11 @@ DEFAULTS = {
     #   "tray" = 隐藏到任务栏（后台继续跑，右下角托盘留图标，双击就回来）
     #   "quit" = 直接退出程序（后台服务一起关掉）
     "close_action": "tray",
+    # 图片（.jpg / .png 这类）要不要生成和显示缩略图
+    #   False = 不生成也不显示：列表里图片只占一个「点开看原图」的格子，
+    #           不花时间生成、也不占缓存；想看就点开，直接看原图更清楚
+    #   True  = 照旧生成并显示缩略图
+    "image_thumbs": False,
 }
 
 

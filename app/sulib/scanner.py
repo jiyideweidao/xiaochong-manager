@@ -53,6 +53,7 @@ class Scanner:
         self._prune_missing([r for r in roots if os.path.isdir(r)])
         self._pair_renders()
         self._mark_cached_thumbs()
+        self._skip_image_thumbs()
         cfg = config.load()
         cfg["scan_rev"] = SCAN_REV
         config.save(cfg)
@@ -280,6 +281,21 @@ class Scanner:
             db.ex("UPDATE assets SET thumb_status='ok', thumb_msg='' WHERE id IN (%s)"
                   % ",".join("?" * len(chunk)), tuple(chunk))
         self.stats["thumbs_cached"] = len(ids)
+
+    def _skip_image_thumbs(self):
+        """按设置不生成图片缩略图时，把图片标成 skip。
+
+        这样「生成缩略图」不会白跑几千张图，界面上「待生成」也不会一直挂着；
+        已经生成过的（ok）保持不动。设置里一打开，图片会自动排回队列。
+        """
+        if bool(config.get("image_thumbs", False)):
+            return
+        n = db.count("SELECT COUNT(*) FROM assets WHERE kind='image' AND thumb_status<>'ok'")
+        if not n:
+            return
+        db.ex("UPDATE assets SET thumb_status='skip', thumb_msg='按设置不生成图片缩略图' "
+              "WHERE kind='image' AND thumb_status<>'ok'")
+        self.stats["thumbs_skipped"] = n
 
     # ---------- cleanup / pairing ----------
     def _prune_missing(self, roots=()):

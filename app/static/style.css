@@ -332,3 +332,8 @@ table.pv-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:1
 .clsec .clrow:hover{background:#fafbfc}
 .clsec .clrow .nm{min-width:190px}
 .clsec .clrow input[type=checkbox]{width:15px;height:15px;flex:none;accent-color:var(--ac);cursor:pointer}
+
+/* 图片不显示缩略图时，卡片上那个「点开看原图」的格子 */
+.card .thumb.nothumb{background:linear-gradient(160deg,#f8f9fb,#eceff4)}
+.card .thumb.nothumb .ph{font-size:11.5px;color:#98a1ae;gap:2px;text-align:center;line-height:1.55}
+.card .thumb.nothumb .nti{font-size:30px;display:block;filter:saturate(.85)}

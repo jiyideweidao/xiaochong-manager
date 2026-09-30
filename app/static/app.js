@@ -321,11 +321,20 @@ function fileItem(e) {
 }
 
 /* ---------------- 卡片 ---------------- */
+// 图片缩略图开关：不勾（默认）时，图片卡片只占一个「点开看原图」的格子
+function imgNoThumb(it) {
+  const on = S.st && S.st.settings && S.st.settings.image_thumbs;
+  return !!it && !it.is_dir && it.kind === "image" && !on;
+}
+// 这些格式浏览器能直接显示，详情里可以直接看原图
+const IMG_DIRECT = /\.(jpe?g|jfif|png|bmp|gif|webp|ico|avif|svg)$/i;
 function cardHtml(it) {
   const on = S.sel.has(it.key) ? " sel" : "";
   const badge = it.is_dir ? "" : `<span class="badge">${esc((it.ext || "").replace(".", "").toUpperCase() || "文件")}</span>`;
   const thumb = it.is_dir
     ? `<div class="thumb ${it.kind === "drive" ? "drive" : "folder"}"><span class="fi">${it.kind === "drive" ? "💽" : "📁"}</span></div>`
+    : imgNoThumb(it)
+    ? `<div class="thumb nothumb"><span class="ph"><span class="nti">🖼</span>${esc(kindLabel(it.kind))}　点开看原图</span>${badge}</div>`
     : `<div class="thumb"><img src="${it.thumb}" loading="lazy" onload="this.dataset.ok='1'" onerror="this.remove()" alt=""><span class="ph">${esc(kindLabel(it.kind))}</span>
         ${["image", "psd", "model"].includes(it.kind) ? "" : `<span class="kindtag">${esc(kindLabel(it.kind))}</span>`}${badge}</div>`;
   const favBtn = it.is_dir ? ""
@@ -536,9 +545,12 @@ function pvHtml(it) {
           <button data-pv="open">用 SketchUp 打开</button>
         </div></div>
         <div class="v3dinfo" id="pv3dInfo"></div>`;
-    case "image": case "svg":
-      return `<div class="pv"><img id="pvImg" src="${tl || t}" alt="" onerror="this.src='${t}'">${bar}
+    case "image": case "svg": {
+      // 图片缩略图关了之后，详情里直接加载原图（比缩略图清楚，也省一次生成）
+      const direct = (imgNoThumb(it) && it.ext && IMG_DIRECT.test(it.ext)) ? it.raw : "";
+      return `<div class="pv"><img id="pvImg" src="${direct || tl || t}" alt="" onerror="this.src='${t}'">${bar}
         <div class="lab">${esc(it.filename)} · 点「原图」看原始分辨率</div></div>`;
+    }
     case "video":
       return `<div class="pv"><video src="${r}" controls preload="metadata"></video><div class="lab">视频预览</div></div>`;
     case "audio":
@@ -1184,12 +1196,17 @@ async function openSettings() {
           <label class="chk"><input type="checkbox" id="setInArc" ${s.index_inside_archives ? "checked" : ""}> 索引压缩包内部文件</label>
           <label class="chk"><input type="checkbox" id="setImgOn" ${s.index_images ? "checked" : ""}> 索引压缩包内图片</label></div>
       </div>
+      <label class="chk"><input type="checkbox" id="setImgThumb" ${s.image_thumbs ? "checked" : ""}>
+        图片显示缩略图</label>
+      <div class="hint" style="margin:0 0 14px">不勾（默认）：图片卡片只显示名字和类型，
+        <b>点开才加载原图</b>——不用等生成、也不占缩略图缓存；勾上就照旧显示缩略图。</div>
       </section>
       <section id="tab2" class="hidden">
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">文件类型默认程序</h4>
       <div class="hint" style="margin:0 0 10px">双击文件时按这里的设置打开；没配的扩展名用 Windows 默认程序。
         .skp 就算不配，也会自动去找 SketchUp。</div>
       <div class="owlist" id="owList"></div>
+      <div class="hint" id="owAuto" style="margin:8px 0 10px"></div>
       <div class="fldrow" style="grid-template-columns:1fr 1.4fr">
         <div class="fld"><label>扩展名（多个用逗号隔开）</label><input id="owExt" placeholder=".psd 或 .jpg,.png"></div>
         <div class="fld"><label>程序路径</label><input id="owExe" placeholder="点下面「选择程序…」或「读系统默认」"></div>
@@ -1266,6 +1283,13 @@ async function openSettings() {
     });
   };
   renderOw();
+  const bi = st.builtin_open_with || [];
+  if ($("#owAuto")) $("#owAuto").innerHTML = bi.length
+    ? "自动认到的默认程序：" + bi.map(r =>
+        `<code>${esc((r.exts || [r.ext]).join(" / "))}</code> → <b>${esc(r.name)}</b>` +
+        `<span class="dim">（${esc(r.exe)}）</span>`).join("　")
+      + "<br>上面没单独配过的，就按这个打开；上面配了就按上面配的。"
+    : "";
   const owFirstExt = () => ($("#owExt").value.split(",")[0] || "").trim();
   $("#owPick").onclick = async () => {
     const p2 = await api("/api/pick-file",
@@ -1336,6 +1360,7 @@ async function openSettings() {
       cache_remind_min: Math.max(5, +$("#setRmin").value || 60),
       cache_limit_mb: Math.max(10, +$("#setRmb").value || 1500),
       close_action: (document.querySelector('input[name="closeAct"]:checked') || {}).value || "tray",
+      image_thumbs: $("#setImgThumb").checked,
       open_with: ow,
     });
     if ($("#setRemind").checked && s.cache_remind_on === false) localStorage.removeItem("xc_cache_remind_at");
@@ -1343,7 +1368,9 @@ async function openSettings() {
     const idxChanged = ($("#setAll").checked !== !!s.index_all_files)
                     || ($("#setInArc").checked !== !!s.index_inside_archives)
                     || ($("#setImgOn").checked !== !!s.index_images);
-    toast("设置已保存" + (idxChanged ? "，索引选项改动要重新扫描才生效" : ""), "ok");
+    const imgThumbChanged = ($("#setImgThumb").checked !== !!s.image_thumbs);
+    toast("设置已保存" + (idxChanged ? "，索引选项改动要重新扫描才生效" : "")
+      + (imgThumbChanged ? "；图片缩略图已按新设置调整（不用重扫）" : ""), "ok");
     loadState();
   };
   $$("#modalBox [data-undo]").forEach(b => b.onclick = async () => {
