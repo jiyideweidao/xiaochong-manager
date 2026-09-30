@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "小虫管理器"
 APP_SUB = "本地资源管理器 · 素材库"
 APP_EN = "XiaoChongManager"
-APP_VERSION = "1.1.8"
+APP_VERSION = "1.1.9"
 
 # ----------------------------------------------------------------- 路径
 def _app_dir() -> Path:
@@ -195,6 +195,10 @@ DEFAULTS = {
     "cache_remind_once": True,
     "cache_remind_min": 60,
     "cache_limit_mb": 1500,
+    # 关掉界面窗口时怎么办：
+    #   "tray" = 隐藏到任务栏（后台继续跑，右下角托盘留图标，双击就回来）
+    #   "quit" = 直接退出程序（后台服务一起关掉）
+    "close_action": "tray",
 }
 
 

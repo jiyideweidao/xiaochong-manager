@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from sulib import (archives, config, db, fsops, ops, scanner, skp3d,
                     textutil, thumbs)
+import winui  # 本目录下的窗口 / 任务栏托盘小工具（纯 ctypes）
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = str(config.STATIC_DIR) if os.path.isdir(str(config.STATIC_DIR)) else os.path.join(HERE, "static")
@@ -114,10 +115,11 @@ def api_state():
                                             "text_preview_kb", "sketchup_exe",
                                             "image_viewer", "cache_remind_on",
                                             "cache_remind_once", "cache_remind_min",
-                                            "cache_limit_mb")},
+                                            "cache_limit_mb", "close_action")},
         "disk_free": ops.disk_free(str(config.DATA_DIR)),
         "scanning": STATE["scanning"],
         "scanning_stats": STATE["last_stats"],
+        "ui": _ui_state(),
     }
 
 
@@ -699,6 +701,9 @@ def api_settings(payload: dict = Body(...)):
             cfg[k] = payload[k]
     if "open_with" in payload:
         cfg["open_with"] = _clean_open_with(payload["open_with"])
+    # 关窗口怎么办：tray = 隐藏到任务栏（托盘），quit = 直接退出程序
+    if payload.get("close_action") in ("tray", "quit"):
+        cfg["close_action"] = payload["close_action"]
     config.save(cfg)
     return {"ok": True, "settings": {k: cfg.get(k) for k in payload},
             "open_with": cfg.get("open_with") or {}}
@@ -1033,13 +1038,94 @@ def api_cleanup(payload: dict = Body(default={})):
     return {"ok": True, "freed": freed, "msg": "已释放 " + _mb_text(freed)}
 
 
+# ------------------------------------------------- 关掉窗口以后怎么办
+# 由「设置 → 常规 → 关闭窗口时」决定：
+#   tray（默认）= 隐藏到任务栏：后台继续跑，右下角托盘留个图标，双击就回来
+#   quit        = 退出程序：窗口一关，后台服务也一起关掉
+_UI = {"seen": False, "miss": 0, "ballooned": False, "act": ""}
+
+
+def _ui_state():
+    try:
+        act = config.load().get("close_action") or "tray"
+        n = len(winui.app_windows())
+    except Exception:
+        act, n = "tray", 0
+    return {"close_action": act, "tray": winui.tray_on(), "windows": n,
+            "window_seen": _UI["seen"], "miss": _UI["miss"],
+            "ballooned": _UI["ballooned"]}
+
+
+def quit_program(delay: float = 0.5):
+    """真正退出：先把托盘图标摘掉（免得留个假图标），再结束进程。"""
+    try:
+        winui.remove_tray()
+    except Exception:
+        pass
+
+    def bye():
+        time.sleep(delay)
+        os._exit(0)
+
+    threading.Thread(target=bye, daemon=True).start()
+
+
+def _ui_watchdog():
+    """每 3 秒看一眼界面窗口（只认自己开的窗口，见 winui.app_windows）。
+
+    - 隐藏到任务栏：窗口没了就留着托盘图标，并提示一次「还在后台跑」
+    - 退出程序：窗口连着 3 轮（约 9 秒）都不在，就把后台服务也一起关掉
+      （刷新页面时窗口一直在，所以不会误伤）
+    """
+    while True:
+        time.sleep(3.0)
+        try:
+            act = config.load().get("close_action") or "tray"
+            if _UI["act"] != act:
+                # 刚换了模式：重新从头数，免得刚切成「退出程序」就立刻退
+                _UI["act"], _UI["miss"] = act, 0
+            if act == "tray":
+                winui.ensure_tray(on_open=winui.open_ui, on_quit=quit_program)
+            else:
+                winui.remove_tray()
+            if winui.app_windows():
+                _UI["seen"], _UI["miss"], _UI["ballooned"] = True, 0, False
+                continue
+            if not _UI["seen"]:
+                continue                      # 一直没开过界面（比如 --no-browser）
+            _UI["miss"] += 1
+            if act == "quit":
+                if _UI["miss"] >= 3:
+                    quit_program(0.2)
+                    return
+            elif not _UI["ballooned"]:
+                _UI["ballooned"] = True
+                winui.tray_balloon(
+                    config.APP_NAME,
+                    "窗口关掉了，我还在后台跑着。双击右下角的小虫图标就能回来。")
+        except Exception:
+            pass
+
+
+_WD = {"started": False}
+
+
+def start_ui_watchdog():
+    """看门狗只能起一次。
+
+    打包后是 start.py 直接跑 uvicorn（不走本文件的 main），所以在「第一个请求」
+    和 main() 两处都挂一下，保证它一定会起来。
+    """
+    if _WD["started"]:
+        return
+    _WD["started"] = True
+    threading.Thread(target=_ui_watchdog, daemon=True, name="xc-ui-watchdog").start()
+
+
 @app.post("/api/shutdown")
 def api_shutdown():
     """退出程序（关闭本地服务）。"""
-    def bye():
-        time.sleep(0.6)
-        os._exit(0)
-    threading.Thread(target=bye, daemon=True).start()
+    quit_program(0.6)
     return {"ok": True}
 
 
@@ -1074,6 +1160,7 @@ async def _first_run(request, call_next):
     if not _FIRST["done"]:
         _FIRST["done"] = True
         threading.Timer(1.5, _auto_scan_if_empty).start()
+    start_ui_watchdog()
     return await call_next(request)
 
 
@@ -1084,6 +1171,7 @@ def main():
     import uvicorn
     port = int(os.environ.get("XC_PORT") or os.environ.get("SU_PORT") or "8765")
     print(f"\n  {config.APP_NAME} 已启动： http://127.0.0.1:{port}\n")
+    start_ui_watchdog()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning", access_log=False)
 
 

@@ -1145,6 +1145,15 @@ async function openSettings() {
     </div>
     <div class="mb">
       <section id="tab1">
+      <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:2px 0 8px">关掉界面窗口的时候</h4>
+      <label class="chk"><input type="radio" name="closeAct" value="tray" ${s.close_action === "quit" ? "" : "checked"}>
+        隐藏到任务栏（推荐）：后台继续跑，右下角托盘留个小虫图标，双击图标就回来</label>
+      <label class="chk"><input type="radio" name="closeAct" value="quit" ${s.close_action === "quit" ? "checked" : ""}>
+        直接退出程序：窗口一关，后台服务也一起关掉（下次双击图标重新启动）</label>
+      <div class="hint" style="margin:2px 0 14px">这里只管点窗口右上角「×」的动作，跟「维护 → 退出程序」不是一回事。<br>
+        当前：<b>${s.close_action === "quit" ? "关窗口 = 退出程序"
+          : ((st.ui && st.ui.tray) ? "关窗口 = 隐藏到任务栏（托盘图标已就位）" : "关窗口 = 隐藏到任务栏（托盘图标正在启动）")}</b>
+        ${s.close_action === "quit" ? "" : "　托盘图标上右键还有「打开界面 / 退出程序」"}</div>
       <dl class="kv">
         <dt>程序位置</dt><dd>${esc(location.origin)}</dd>
         <dt>数据目录</dt><dd>${esc(st.data_dir)}</dd>
@@ -1326,6 +1335,7 @@ async function openSettings() {
       cache_remind_once: $("#setOnce").checked,
       cache_remind_min: Math.max(5, +$("#setRmin").value || 60),
       cache_limit_mb: Math.max(10, +$("#setRmb").value || 1500),
+      close_action: (document.querySelector('input[name="closeAct"]:checked') || {}).value || "tray",
       open_with: ow,
     });
     if ($("#setRemind").checked && s.cache_remind_on === false) localStorage.removeItem("xc_cache_remind_at");

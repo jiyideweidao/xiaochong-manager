@@ -31,7 +31,7 @@ DIST = os.path.join(HERE, "dist")
 EXTRA = os.path.join(HERE, "extra")
 OUTPUT_DIR = os.environ.get("XC_OUT") or os.path.join(HERE, "安装包")
 APP_NAME = "小虫管理器"
-APP_VER = "1.1.8"
+APP_VER = "1.1.9"
 def _find_iscc() -> str:
     """找 Inno Setup 6 的编译器（装在哪都可能）。"""
     for p in (os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
@@ -100,11 +100,14 @@ README = """小虫管理器 %s —— 使用说明
         也可以点图片上的「指定看图软件…」就地设置
       · 想恢复成 Windows 默认，点「跟 Windows 默认一致」
 
-五、怎么关闭
-    · 界面右上角齿轮「设置」→ 底部「退出程序」。
-    · 或者双击安装目录里的「停止小虫管理器.bat」。
-    · 只关掉窗口不算退出：后台服务还在跑（缩略图、索引不用重新加载），
-      再双击桌面图标立刻就回来。
+五、关掉窗口算不算退出（自己选）
+    · 设置 → 常规 →「关掉界面窗口的时候」，两个选项：
+        - 隐藏到任务栏（默认）：后台继续跑（缩略图、索引不用重新加载），
+          任务栏右下角托盘留着一个小虫图标，双击图标就回来；
+          右键图标还有「打开界面 / 退出程序」。
+        - 直接退出程序：窗口一关，后台服务也一起关掉；下次双击桌面图标重新启动。
+    · 想马上退出程序：设置 → 维护 →「退出程序」，
+      或双击安装目录里的「停止小虫管理器.bat」，或右键托盘图标 →「退出程序」。
 
 六、内嵌能力（不需要另装任何东西）
     · 解压：zip / tar / tar.gz / 7z / rar / iso 等 —— 程序自带 7-Zip 内核（bin\\7z.exe），
