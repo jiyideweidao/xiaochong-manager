@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "小虫管理器"
 APP_SUB = "本地资源管理器 · 素材库"
 APP_EN = "XiaoChongManager"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 
 # ----------------------------------------------------------------- 路径
 def _app_dir() -> Path:
@@ -165,6 +165,26 @@ def norm_ext(ext: str) -> str:
 def ext_of(name: str) -> str:
     return os.path.splitext(name or "")[1].lower()
 
+
+def as_bool(v, default: bool = False) -> bool:
+    """把勾选框的值稳稳地变成真假。
+
+    前端正常传的是 true/false，但偶尔会传来字符串或数字，
+    这里统一处理：'false' / '0' / 'no' / 'off' / 空 都算假，其余非空算真。
+    """
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return v != 0
+    t = str(v).strip().lower()
+    if t in ("", "0", "false", "no", "off", "none", "null"):
+        return False
+    if t in ("1", "true", "yes", "on"):
+        return True
+    return default
+
 # ----------------------------------------------------------------- 设置
 # 首次运行时自动收录的目录：只挑本机真实存在的，都没有就留空，
 # 由界面上的「+ 添加素材目录」手动加。
@@ -204,6 +224,11 @@ DEFAULTS = {
     #           不花时间生成、也不占缓存；想看就点开，直接看原图更清楚
     #   True  = 照旧生成并显示缩略图
     "image_thumbs": False,
+    # 列表卡片显示：
+    #   show_thumbs = 总开关。False = 所有卡片都不显示缩略图，只显示文字（翻页更快）
+    #   show_path   = 卡片上写「真实文件名 + 所在文件夹的完整路径」（方便在硬盘里找）
+    "show_thumbs": True,
+    "show_path": False,
 }
 
 

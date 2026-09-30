@@ -321,10 +321,28 @@ function fileItem(e) {
 }
 
 /* ---------------- 卡片 ---------------- */
-// 图片缩略图开关：不勾（默认）时，图片卡片只占一个「点开看原图」的格子
+// 图片缩略图开关：不勾（默认）时，图片不生成也不显示缩略图
 function imgNoThumb(it) {
   const on = S.st && S.st.settings && S.st.settings.image_thumbs;
   return !!it && !it.is_dir && it.kind === "image" && !on;
+}
+// 卡片上到底显不显示缩略图：总开关关掉，或者这张是图片而且没开图片缩略图
+function cardNoThumb(it) {
+  const st = (S.st && S.st.settings) || {};
+  if (st.show_thumbs === false) return true;
+  return imgNoThumb(it);
+}
+// 卡片上要不要写「真实文件名 + 所在文件夹的完整地址」
+function showPathOn() {
+  return !!(S.st && S.st.settings && S.st.settings.show_path);
+}
+// 设置里改了「卡片显示方式」后，原地把当前列表重画一遍（不用重新扫描、不丢滚动位置）
+function redrawCards() {
+  if (S.mode === "browse") { renderBrowse(); return; }
+  if (!S.items || !S.items.length) return;
+  $("#grid").innerHTML = S.items.map(cardHtml).join("");
+  bindCards();
+  syncSel();
 }
 // 这些格式浏览器能直接显示，详情里可以直接看原图
 const IMG_DIRECT = /\.(jpe?g|jfif|png|bmp|gif|webp|ico|avif|svg)$/i;
@@ -333,20 +351,26 @@ function cardHtml(it) {
   const badge = it.is_dir ? "" : `<span class="badge">${esc((it.ext || "").replace(".", "").toUpperCase() || "文件")}</span>`;
   const thumb = it.is_dir
     ? `<div class="thumb ${it.kind === "drive" ? "drive" : "folder"}"><span class="fi">${it.kind === "drive" ? "💽" : "📁"}</span></div>`
-    : imgNoThumb(it)
-    ? `<div class="thumb nothumb"><span class="ph"><span class="nti">🖼</span>${esc(kindLabel(it.kind))}　点开看原图</span>${badge}</div>`
+    : cardNoThumb(it)
+    ? `<div class="thumb nothumb"><span class="ph"><span class="nti">${it.kind === "image" ? "🖼" : "📄"}</span>${esc(kindLabel(it.kind))}　${it.kind === "image" ? "点开看原图" : "点开看"}</span>${badge}</div>`
     : `<div class="thumb"><img src="${it.thumb}" loading="lazy" onload="this.dataset.ok='1'" onerror="this.remove()" alt=""><span class="ph">${esc(kindLabel(it.kind))}</span>
         ${["image", "psd", "model"].includes(it.kind) ? "" : `<span class="kindtag">${esc(kindLabel(it.kind))}</span>`}${badge}</div>`;
   const favBtn = it.is_dir ? ""
     : `<button class="favbtn${it.favorite ? " fav-on" : ""}" data-fav="1" title="${it.favorite ? "取消收藏" : "收藏到我的收藏"}">${it.favorite ? "★" : "☆"}</button>`;
-  const sub = it.from === "lib"
+  const fullPath = it.from === "lib" ? (it.source_path || "") : (it.path || "");
+  const fullName = it.filename || it.name || "";
+  const withPath = showPathOn() && !it.is_dir;
+  const pathTxt = fullPath + (it.inner ? "  ↳ " + it.inner : "");
+  const sub = withPath
+    ? `<span class="o full" title="${esc(pathTxt)}">${esc(pathTxt)}</span>`
+    : it.from === "lib"
     ? `${it.category ? `<span class="c">${esc(it.category)}</span>` : ""}<span class="o" title="${esc(it.origin || "")}">${esc(it.origin || it.folder || "")}</span>`
     : `${it.is_dir ? `<span class="c">文件夹</span>` : `<span class="c">${esc(fmtSize(it.size))}</span>`}<span class="o">${esc(fmtTime(it.mtime))}</span>`;
   const quick = `<div class="quick"><button data-q="open">打开</button><button data-q="reveal">定位</button>
       <button data-q="export">复制到…</button>${it.is_dir ? "" : `<button data-q="copy">复制</button>`}</div>`;
   return `<div class="card${on}" data-key="${esc(it.key)}">
     ${thumb}${favBtn}${it.kind === "model" ? `<span class="tag3d">3D</span>` : ""}
-    <div class="meta"><div class="name" title="${esc(it.name)}">${esc(it.name)}</div><div class="sub">${sub}</div></div>
+    <div class="meta"><div class="name" title="${esc(withPath ? (fullName + "\n" + pathTxt) : it.name)}">${esc(withPath ? fullName : it.name)}</div><div class="sub${withPath ? " pathmode" : ""}">${sub}</div></div>
     ${quick}</div>`;
 }
 function bindCards(scope = "#grid") {
@@ -1196,10 +1220,18 @@ async function openSettings() {
           <label class="chk"><input type="checkbox" id="setInArc" ${s.index_inside_archives ? "checked" : ""}> 索引压缩包内部文件</label>
           <label class="chk"><input type="checkbox" id="setImgOn" ${s.index_images ? "checked" : ""}> 索引压缩包内图片</label></div>
       </div>
+      <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">列表卡片显示</h4>
+      <label class="chk"><input type="checkbox" id="setThumbs" ${s.show_thumbs === false ? "" : "checked"}>
+        显示缩略图（总开关）</label>
       <label class="chk"><input type="checkbox" id="setImgThumb" ${s.image_thumbs ? "checked" : ""}>
         图片显示缩略图</label>
-      <div class="hint" style="margin:0 0 14px">不勾（默认）：图片卡片只显示名字和类型，
-        <b>点开才加载原图</b>——不用等生成、也不占缩略图缓存；勾上就照旧显示缩略图。</div>
+      <label class="chk"><input type="checkbox" id="setShowPath" ${s.show_path ? "checked" : ""}>
+        显示文件地址和名字</label>
+      <div class="hint" style="margin:0 0 14px">
+        · <b>显示缩略图</b>：不勾 = 所有卡片都不显示缩略图，只写文字，翻页更快（只是不显示，缓存照旧管）。<br>
+        · <b>图片显示缩略图</b>：不勾（默认）= 图片不生成也不显示缩略图，卡片点开直接看原图，省缓存也不用等。<br>
+        · 图片想看到缩略图，把上面<b>两个都勾上</b>。<br>
+        · <b>显示文件地址和名字</b>：勾上 = 卡片上写真实文件名和它所在的完整文件夹，方便在硬盘里找。</div>
       </section>
       <section id="tab2" class="hidden">
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">文件类型默认程序</h4>
@@ -1361,6 +1393,8 @@ async function openSettings() {
       cache_limit_mb: Math.max(10, +$("#setRmb").value || 1500),
       close_action: (document.querySelector('input[name="closeAct"]:checked') || {}).value || "tray",
       image_thumbs: $("#setImgThumb").checked,
+      show_thumbs: $("#setThumbs").checked,
+      show_path: $("#setShowPath").checked,
       open_with: ow,
     });
     if ($("#setRemind").checked && s.cache_remind_on === false) localStorage.removeItem("xc_cache_remind_at");
@@ -1369,9 +1403,13 @@ async function openSettings() {
                     || ($("#setInArc").checked !== !!s.index_inside_archives)
                     || ($("#setImgOn").checked !== !!s.index_images);
     const imgThumbChanged = ($("#setImgThumb").checked !== !!s.image_thumbs);
+    const showChanged = ($("#setThumbs").checked !== (s.show_thumbs !== false))
+                     || ($("#setShowPath").checked !== !!s.show_path);
     toast("设置已保存" + (idxChanged ? "，索引选项改动要重新扫描才生效" : "")
-      + (imgThumbChanged ? "；图片缩略图已按新设置调整（不用重扫）" : ""), "ok");
-    loadState();
+      + (imgThumbChanged ? "；图片缩略图已按新设置调整（不用重扫）" : "")
+      + (showChanged ? "；卡片显示方式已更新" : ""), "ok");
+    await loadState();
+    if (showChanged) redrawCards();
   };
   $$("#modalBox [data-undo]").forEach(b => b.onclick = async () => {
     if (!confirm("撤销这批重命名？")) return;

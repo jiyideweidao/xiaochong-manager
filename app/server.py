@@ -117,7 +117,7 @@ def api_state():
                                             "image_viewer", "cache_remind_on",
                                             "cache_remind_once", "cache_remind_min",
                                             "cache_limit_mb", "close_action",
-                                            "image_thumbs")},
+                                            "image_thumbs", "show_thumbs", "show_path")},
         "disk_free": ops.disk_free(str(config.DATA_DIR)),
         "scanning": STATE["scanning"],
         "scanning_stats": STATE["last_stats"],
@@ -704,6 +704,10 @@ def api_settings(payload: dict = Body(...)):
               "cache_limit_mb"):
         if k in payload:
             cfg[k] = payload[k]
+    # 卡片显示开关：只认真假，避免前端偶尔传来字符串把状态弄乱
+    for k in ("show_thumbs", "show_path"):
+        if k in payload:
+            cfg[k] = config.as_bool(payload[k], bool(cfg.get(k)))
     if "open_with" in payload:
         cfg["open_with"] = _clean_open_with(payload["open_with"])
     # 关窗口怎么办：tray = 隐藏到任务栏（托盘），quit = 直接退出程序
@@ -712,7 +716,7 @@ def api_settings(payload: dict = Body(...)):
     # 图片缩略图：关掉就不再批量生成（卡片上点开看原图）；重新打开时
     # 把之前标了 skip 的图片排回队列，「生成缩略图」会补上。
     if "image_thumbs" in payload:
-        on = bool(payload["image_thumbs"])
+        on = config.as_bool(payload["image_thumbs"])
         cfg["image_thumbs"] = on
         if on:
             db.ex("UPDATE assets SET thumb_status='pending' WHERE kind='image' "

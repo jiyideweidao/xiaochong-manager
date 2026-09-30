@@ -101,6 +101,10 @@ button,input,select{font:inherit;color:inherit}
   overflow:hidden;white-space:nowrap}
 .card .sub .c{background:#f2f3f6;border-radius:4px;padding:1px 5px;color:#4b5563;flex:0 0 auto}
 .card .sub .o{overflow:hidden;text-overflow:ellipsis}
+/* 卡片上写完整地址时：允许折行，最多两行，看得清盘符和文件夹 */
+.card .sub.pathmode{display:block;white-space:normal;line-height:1.5}
+.card .sub.pathmode .o.full{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+  overflow:hidden;word-break:break-all;white-space:normal;color:#6b7280}
 .tags{position:absolute;top:6px;left:6px;display:flex;gap:4px;flex-wrap:wrap;max-width:90%}
 .tag{background:rgba(17,24,39,.72);color:#fff;border-radius:5px;padding:1.5px 6px;font-size:10.5px;
   backdrop-filter:blur(4px)}
