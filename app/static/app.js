@@ -11,6 +11,7 @@ const S = {
   lastIndex: -1, loading: false, st: null, kinds: [], kindMap: {},
   dir: "", dirData: null, dirFilter: "", showHidden: 0, sortDir: "name", dirItems: [],
   clip: { paths: [], mode: "copy" }, busy: false, loaded: "",
+  searchRes: null, searchFor: "", searchSeq: 0,
 };
 
 // 素材库模式下「已加载文件夹」：加载后右边只看这个文件夹，左边类型/分类也都统计它
@@ -340,7 +341,7 @@ function fileItem(e) {
     preview: e.is_dir ? "folder" : (e.preview || "none"),
     thumb: e.is_dir ? "" : "/api/thumb-path?" + q, raw: "/api/raw?" + q, text: "/api/text?" + q,
     path: e.path, source_path: e.path, inner: "", filename: e.name, from: "fs",
-    favorite: e.favorite || 0, asset_id: e.asset_id || 0,
+    favorite: e.favorite || 0, asset_id: e.asset_id || 0, rel: e.rel,
   };
 }
 
@@ -368,9 +369,11 @@ function rowHtml(it, on) {
   const fullName = it.filename || it.name || "";
   const pathTxt = fullPath + (it.inner ? "  ↳ " + it.inner : "");
   const icon = it.is_dir ? (it.kind === "drive" ? "💽" : "📁") : (ROW_ICON[it.kind] || "📄");
+  const relTxt = (it.rel === undefined || it.rel === null) ? ""
+    : (it.rel ? "📁 " + it.rel + " · " : "📁 就在这个文件夹 · ");
   const right = withPath ? pathTxt
     : it.from === "lib" ? [it.category, it.origin || it.folder].filter(Boolean).join(" · ")
-    : (it.is_dir ? "文件夹" : fmtSize(it.size)) + " · " + fmtTime(it.mtime);
+    : relTxt + (it.is_dir ? "文件夹" : fmtSize(it.size)) + " · " + fmtTime(it.mtime);
   const left = withPath ? (it.is_dir ? "文件夹" : fmtSize(it.size))
     : (it.is_dir ? "文件夹" : kindLabel(it.kind));
   const title = withPath ? fullName + "\n" + pathTxt : (it.name || "");
@@ -416,7 +419,7 @@ function cardHtml(it) {
     ? `<span class="o full" title="${esc(pathTxt)}">${esc(pathTxt)}</span>`
     : it.from === "lib"
     ? `${it.category ? `<span class="c">${esc(it.category)}</span>` : ""}<span class="o" title="${esc(it.origin || "")}">${esc(it.origin || it.folder || "")}</span>`
-    : `${it.is_dir ? `<span class="c">文件夹</span>` : `<span class="c">${esc(fmtSize(it.size))}</span>`}<span class="o">${esc(fmtTime(it.mtime))}</span>`;
+    : `${it.is_dir ? `<span class="c">文件夹</span>` : `<span class="c">${esc(fmtSize(it.size))}</span>`}<span class="o">${esc((it.rel === undefined || it.rel === null ? "" : (it.rel ? it.rel + " · " : "就在这个文件夹 · ")) + fmtTime(it.mtime))}</span>`;
   return `<div class="card${on}" data-key="${esc(it.key)}">
     ${thumb}${favBtn}${it.kind === "model" ? `<span class="tag3d">3D</span>` : ""}
     <div class="meta"><div class="name" title="${esc(withPath ? (fullName + "\n" + pathTxt) : it.name)}">${esc(withPath ? fullName : it.name)}</div><div class="sub${withPath ? " pathmode" : ""}">${sub}</div></div>
@@ -655,6 +658,12 @@ function sortDirItems(items) {
   });
 }
 function renderBrowse() {
+  const wasSearch = !!S.searchRes;
+  S.searchRes = null; S.searchFor = "";
+  if (wasSearch) {
+    S.dirFilter = "";                     // 搜索时筛的类型对文件夹没意义，退回时清掉
+    if (S.mode === "lib" && S.loaded) setTimeout(refreshSideStats, 0);
+  }
   const d = S.dirData; if (!d) return;
   const dirs = (d.dirs || []).map(e => fileItem(Object.assign({}, e, { is_dir: true })));
   const files = (d.files || []).map(fileItem);
@@ -673,6 +682,63 @@ function renderBrowse() {
 }
 // 左侧「类型 / 分类」什么时候跟着走：浏览模式，或者素材库里加载了文件夹
 const sideStatsOn = () => S.mode === "browse" || (S.mode === "lib" && !!S.loaded);
+// 加载了根目录后，搜索框 = 在这个文件夹里（含子文件夹）递归找文件名
+async function applyFsSearch() {
+  const kw = S.q.trim();
+  if (!kw) { S.searchRes = null; S.searchFor = ""; renderBrowse(); return; }
+  const scope = S.dir || S.loaded;
+  const seq = ++S.searchSeq;
+  S.searchFor = kw;
+  $("#crumb").textContent = "正在搜 “" + kw + "” …";
+  let d = null;
+  try {
+    d = await api("/api/fs/search?path=" + encodeURIComponent(scope)
+                  + "&q=" + encodeURIComponent(kw) + "&hidden=" + S.showHidden);
+  } catch (e) {
+    if (seq === S.searchSeq) { toast("搜索失败：" + e.message, "err"); renderBrowse(); }
+    return;
+  }
+  if (seq !== S.searchSeq || S.q.trim() !== kw) return;   // 关键词又变了，丢掉这次结果
+  S.searchRes = d;
+  renderSearch();
+}
+
+function renderSearch() {
+  const d = S.searchRes;
+  if (!d) { renderBrowse(); return; }
+  S.sel.clear(); S.map = {};
+  const dirs = (d.items || []).filter(e => e.is_dir).map(fileItem);
+  const files = (d.items || []).filter(e => !e.is_dir).map(fileItem);
+  const flt = o => !S.dirFilter || o.kind === S.dirFilter;
+  S.dirItems = sortDirItems(dirs.filter(flt)).concat(sortDirItems(files.filter(flt)));
+  S.dirItems.forEach(i => S.map[i.key] = i);
+  $("#grid").innerHTML = S.dirItems.map(cardHtml).join("");
+  bindCards();
+  syncSel();
+  renderSearchKinds();
+  const n = S.dirItems.length;
+  $("#crumb").textContent = "在 " + (d.path || S.loaded) + " 里搜 “" + S.searchFor + "” · 命中 " + n + " 项"
+    + (S.dirFilter ? "（只看一类）" : "") + (d.truncated ? "，结果太多只列了前面这些" : "");
+  if (n) $("#empty").classList.add("hidden");
+  else emptyState("没搜到", "少打几个字或换个词；搜的是文件名，包含子文件夹");
+}
+
+// 搜索时左侧「类型」= 命中结果里的类型统计（点一下只在结果里筛）
+function renderSearchKinds() {
+  const d = S.searchRes;
+  if (!d) return;
+  const items = d.items || [];
+  const counts = {};
+  items.forEach(e => { if (!e.is_dir) { const k = e.kind || "other"; counts[k] = (counts[k] || 0) + 1; } });
+  const list = [["", "全部", items.length, "#374151"]]
+    .concat(Object.keys(counts).sort((a, b) => counts[b] - counts[a])
+      .map(k => [k, kindLabel(k), counts[k], kindColor(k)]));
+  $("#dirKinds").innerHTML = list.map(([k, label, n, col]) =>
+    `<button data-k="${k}" class="${S.dirFilter === k ? "on" : ""}"><i class="dot" style="background:${col}"></i>${esc(label)} <span class="n">${n}</span></button>`).join("");
+  $$("#dirKinds button").forEach(b => b.onclick = () => { S.dirFilter = b.dataset.k; refreshList(); });
+  if ($("#dirKindPath")) $("#dirKindPath").textContent = "搜“" + S.searchFor + "”的结果";
+}
+
 function dirStatTarget() {
   // 「选中单个文件夹」就统计那个文件夹；没选就是当前打开的这个
   if (!sideStatsOn() || S.sel.size !== 1) return null;
@@ -691,6 +757,7 @@ function queueSideStats() {
   queueSideStats._t = setTimeout(() => { if (statKey() !== STATKEY) refreshSideStats(); }, 120);
 }
 async function refreshSideStats() {
+  if (S.searchRes) return;              // 正在看搜索结果：左侧类型归搜索管
   const seq = ++STATSEQ;
   const pick = dirStatTarget();
   const target = pick ? pick.path : (S.dir || "");
@@ -726,8 +793,8 @@ function renderDirKinds(d, picked) {
   $$("#dirKinds button").forEach(b => b.onclick = async () => {
     const pick = dirStatTarget();
     if (pick && b.dataset.k === "") { S.sel.clear(); S.map = {}; syncSel(); return; }
-    if (pick) { await browse(pick.path); S.dirFilter = b.dataset.k; renderBrowse(); refreshSideStats(); }
-    else { S.dirFilter = b.dataset.k; renderDirKinds(); renderBrowse(); }
+    if (pick) { await browse(pick.path); S.dirFilter = b.dataset.k; refreshList(); refreshSideStats(); }
+    else { S.dirFilter = b.dataset.k; renderDirKinds(); refreshList(); }
   });
 }
 
@@ -1720,7 +1787,7 @@ function syncLoadedUI() {
   $("#styleBox").classList.toggle("hidden", on);
   const q = $("#q");
   if (q) q.placeholder = on
-    ? "在这个文件夹里筛选文件名…（按 / 聚焦）"
+    ? "在这个文件夹（含子文件夹）里搜文件名…（按 / 聚焦）"
     : "搜索素材名 / 分类 / 关键词 / 扩展名，如：吊灯、现代、.pdf（按 / 聚焦）";
   if (!on) { $("#loadedRow").innerHTML = ""; return; }
   const nm = S.loaded.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || S.loaded;
@@ -1740,18 +1807,31 @@ async function loadFolder(path) {
   await browse(path);
   if (S.dirData === before) {            // 没换成新目录 = 打不开（browse 已经提示过）
     S.loaded = keep; syncLoadedUI(); loadKinds(); loadFacets(); reload();
+    if (!keep || keep === path) saveLoadedRoot("");   // 上次记住的目录没了，别再记
     return;
   }
   syncLoadedUI();
   refreshSideStats();
+  saveLoadedRoot(S.loaded);              // 记住：下次打开程序自动回到这里
+}
+
+// 记住 / 忘掉「上次加载的根目录」（存在设置里，关了程序也在）
+function saveLoadedRoot(p) {
+  try { api("/api/settings", { loaded_root: p || "" }); } catch (e) { /* 记不住也不影响用 */ }
+}
+function savedLoadedRoot() {
+  const p = ((S.st && S.st.settings) || {}).loaded_root;
+  return typeof p === "string" ? p.trim() : "";
 }
 
 // 回到素材库（只看全库）
 function unloadFolder() {
   if (!S.loaded) return;
   S.loaded = ""; S.dirFilter = ""; S.dir = ""; S.dirData = null; S.dirItems = [];
+  S.searchRes = null; S.searchFor = ""; S.q = ""; $("#q").value = "";
   S.sel.clear(); S.map = {}; syncSel();
   syncLoadedUI();
+  saveLoadedRoot("");                    // 点了「×」= 以后别自动加载了
   loadKinds(); loadFacets(); reload();
 }
 
@@ -1764,11 +1844,17 @@ function selectAll() {
 const debounce = (fn, ms = 300) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
 const onSearch = debounce(() => {
   if (isLib()) { S.offset = 0; reload(); }
+  else if (S.mode === "lib" && S.loaded) applyFsSearch();   // 加载了根目录：在它里面（含子文件夹）递归搜
   else renderBrowse();
 }, 280);
+// 当前列表该用哪套渲染：搜索结果 or 文件夹内容
+function refreshList() { return S.searchRes ? renderSearch() : renderBrowse(); }
 
 $("#q").oninput = e => { S.q = e.target.value; onSearch(); };
-$("#qclear").onclick = () => { $("#q").value = ""; S.q = ""; isLib() ? reload() : renderBrowse(); };
+$("#qclear").onclick = () => {
+  $("#q").value = ""; S.q = "";
+  isLib() ? reload() : renderBrowse();           // renderBrowse 会看到「刚才在搜索」并收尾
+};
 $("#sort").onchange = e => { S.sort = e.target.value; S.offset = 0; reload(); };
 $("#onlyRender").onchange = e => { S.onlyRender = e.target.checked ? 1 : 0; S.offset = 0; reload(); };
 // 图片缩略图开关（就在「只看带效果图」旁边）：勾了图片才生成/显示缩略图，不勾就出文字列表、点开看原图
@@ -2119,7 +2205,9 @@ io.observe($("#sentinel"));
   await loadState();
   await loadKinds();
   await loadFacets();
+  const backLoaded = savedLoadedRoot();
   if (location.hash === "#browse") setMode("browse");
+  else if (backLoaded) await loadFolder(backLoaded);     // 上次加载的根目录，自动回去
   else await reload();
   pollJobs();
   if (!S.st.total) {

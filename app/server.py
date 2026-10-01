@@ -117,7 +117,8 @@ def api_state():
                                             "image_viewer", "cache_remind_on",
                                             "cache_remind_once", "cache_remind_min",
                                             "cache_limit_mb", "close_action",
-                                            "image_thumbs", "show_thumbs", "show_path")},
+                                            "image_thumbs", "show_thumbs", "show_path",
+                                            "loaded_root")},
         "disk_free": ops.disk_free(str(config.DATA_DIR)),
         "scanning": STATE["scanning"],
         "scanning_stats": STATE["last_stats"],
@@ -724,6 +725,10 @@ def api_settings(payload: dict = Body(...)):
         else:
             db.ex("UPDATE assets SET thumb_status='skip', thumb_msg='按设置不生成图片缩略图' "
                   "WHERE kind='image' AND thumb_status<>'ok'")
+    # 上次加载的根目录（下次打开程序自动回到这里；空字符串 = 不自动加载）
+    if "loaded_root" in payload:
+        v = payload["loaded_root"]
+        cfg["loaded_root"] = v.strip()[:500] if isinstance(v, str) else ""
     config.save(cfg)
     return {"ok": True, "settings": {k: cfg.get(k) for k in payload},
             "open_with": cfg.get("open_with") or {}}
@@ -894,6 +899,24 @@ def api_fs_groups(path: str = "", hidden: int = 0, limit: int = Query(400, le=20
     if not p or not os.path.isdir(p):
         return {"path": p, "groups": [], "error": "目录不存在" if p else ""}
     return fsops.subfolder_stats(p, bool(hidden), limit)
+
+
+@app.get("/api/fs/search")
+def api_fs_search(path: str = "", q: str = "", hidden: int = 0,
+                  limit: int = Query(400, le=2000)):
+    """在 path 里递归搜文件名（给素材库「加载了根目录」之后用）。"""
+    p = fsops.norm(path) if path else ""
+    kw = (q or "").strip()
+    if not p or not os.path.isdir(p):
+        return {"path": p, "items": [], "error": "目录不存在" if p else ""}
+    if not kw:
+        return {"path": p, "items": [], "truncated": False, "scanned": 0}
+    d = fsops.search_tree(p, kw, bool(hidden), limit)
+    files = [e for e in d["items"] if not e.get("is_dir")]
+    _mark_favorites(files)
+    for e in d["items"]:
+        e["preview"] = "folder" if e.get("is_dir") else preview_kind(e["name"], e.get("kind") or "")
+    return d
 
 
 @app.post("/api/fs/open")

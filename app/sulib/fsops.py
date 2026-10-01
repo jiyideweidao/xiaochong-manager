@@ -132,6 +132,68 @@ def list_dir(path: str, show_hidden: bool = False, limit: int = 4000):
                      if os.path.splitdrive(path)[0] else 0)}
 
 
+def search_tree(path: str, kw: str, show_hidden: bool = False, limit: int = 400,
+                max_scan: int = 200000, secs: float = 6.0) -> dict:
+    """在 path 下面**递归**找文件名（含子文件夹名）里带 kw 的。
+
+    给「加载了根目录之后在范围内搜索」用：先搜当前这一层，再往下一层层搜（广度优先），
+    命中的每一项都带上 rel（相对路径，说明它在哪个子文件夹里）。
+    有数量上限（limit / max_scan）和时间上限（secs），到点就返回已找到的，界面不会被卡住。
+    """
+    path = norm(path)
+    if not os.path.isdir(path) or not kw:
+        return {"path": path, "items": [], "scanned": 0, "truncated": False}
+    needle = kw.lower()
+    found_dir, found_file = [], []
+    queue, qi = [path], 0
+    scanned, truncated = 0, False
+    t0 = time.time()
+    while qi < len(queue):
+        cur = queue[qi]
+        qi += 1
+        try:
+            it = os.scandir(cur)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                scanned += 1
+                if scanned > max_scan or time.time() - t0 > secs:
+                    truncated = True
+                    break
+                try:
+                    is_dir = e.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                hit = needle in e.name.lower()
+                if not is_dir and not hit:
+                    continue
+                try:
+                    hidden = e.name.startswith(".") or is_hidden(e.path)
+                except OSError:
+                    hidden = e.name.startswith(".")
+                if hidden and not show_hidden:
+                    continue
+                if is_dir:
+                    queue.append(e.path)
+                if hit:
+                    d = entry(e.path, is_dir, with_stat=True)
+                    rel = os.path.dirname(os.path.relpath(e.path, path))
+                    d["rel"] = "" if rel in (".", "") else rel
+                    (found_dir if is_dir else found_file).append(d)
+                    if len(found_dir) + len(found_file) >= limit:
+                        truncated = True
+                        break
+        if time.time() - t0 > secs:
+            truncated = True
+        if truncated and len(found_dir) + len(found_file) >= limit:
+            break
+    found_dir.sort(key=lambda x: x["name"].lower())
+    found_file.sort(key=lambda x: x["name"].lower())
+    return {"path": path, "items": found_dir + found_file, "dirs": len(found_dir),
+            "files": len(found_file), "scanned": scanned, "truncated": truncated}
+
+
 def subfolder_stats(path: str, show_hidden: bool = False, limit: int = 400,
                     secs: float = 3.0) -> dict:
     """浏览模式左侧「分类」用：把当前文件夹下的子文件夹逐个点一遍，数里面有多少个文件。
