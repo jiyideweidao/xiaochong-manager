@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小虫管理器 · 本地资源管理器</title>
 <link rel="icon" href="/static/小虫.ico">
-<link rel="stylesheet" href="/static/style.css?v=2.7.1">
+<link rel="stylesheet" href="/static/style.css?v=2.7.2">
 </head>
 <body>
 <header class="topbar">
@@ -32,10 +32,10 @@
         <h4>素材库目录</h4>
         <div id="roots" class="roots"></div>
         <button id="btnAddRoot" class="link">+ 添加素材目录</button>
-        <button id="btnLoadDir" class="btn sm" style="width:100%;margin-top:6px">📂 加载文件夹…</button>
+        <button id="btnLoadDir" class="btn sm" style="width:100%;margin-top:6px">📂 加载根目录…</button>
         <div id="loadedBox" class="hidden">
           <div class="roots" id="loadedRow"></div>
-          <div class="hint" style="margin-top:6px">右边只看这个文件夹，左边「类型 / 分类」统计的就是它（选中某个子文件夹就统计那个）。点上面的 × 回素材库。</div>
+          <div class="hint" style="margin-top:6px">右边只看这个根目录，左边「类型 / 分类」统计的就是它（选中某个子文件夹就统计那个）。点上面的 × 回素材库；点别的根目录那一行就换一个。</div>
         </div>
       </section>
       <section id="secLibKinds">
@@ -142,6 +142,6 @@
 <div id="toasts" class="toasts"></div>
 <div id="jobs" class="jobs hidden"></div>
 
-<script src="/static/app.js?v=2.7.1"></script>
+<script src="/static/app.js?v=2.7.2"></script>
 </body>
 </html>

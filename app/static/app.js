@@ -234,14 +234,7 @@ async function loadState() {
     ` · SKP 3D 看图 ${st.skp3d && st.skp3d.available ? "可用" : "不可用"}` +
     ` · SketchUp ${st.sketchup ? "已找到" : "未找到"}` +
     ` · ffmpeg ${st.ffmpeg ? "已就绪" : "未找到"}</span></div>`;
-  $("#roots").innerHTML = (st.roots || []).map(r =>
-    `<div class="root" title="${esc(r.path)}"><span>${esc(r.path)}</span><button data-rm="${esc(r.path)}" title="移除">×</button></div>`).join("")
-    || `<div class="dim" style="font-size:12px">还没有素材目录</div>`;
-  $$("#roots button").forEach(b => b.onclick = async () => {
-    if (!confirm("从素材库移除该目录？\n（不会删除磁盘文件，只是不再索引）")) return;
-    await api("/api/roots", { action: "remove", path: b.dataset.rm });
-    loadState(); loadKinds(); loadFacets();
-  });
+  renderRoots();
   if (st.cache) {
     CACHE.info = st.cache;
     if (!CACHE.ticked) { CACHE.ticked = 1; checkCache(false); }
@@ -249,6 +242,26 @@ async function loadState() {
   const tb = $("#tbImgThumb");
   if (tb) tb.checked = !!(st.settings && st.settings.image_thumbs);
   return st;
+}
+
+function renderRoots() {
+  const box = $("#roots");
+  if (!box) return;
+  const rs = (S.st && S.st.roots) || [];
+  const norm = p => (p || "").replace(/[\\/]+$/, "").toLowerCase();
+  const cur = norm(S.loaded);
+  box.innerHTML = rs.map(r =>
+    `<div class="root${cur && norm(r.path) === cur ? " on" : ""}" data-root="${esc(r.path)}" title="${esc(r.path)}\n点一下 = 加载这个根目录">`
+    + `<span>${esc(r.path)}</span><button data-rm="${esc(r.path)}" title="从素材库移除">×</button></div>`).join("")
+    || `<div class="dim" style="font-size:12px">还没有素材目录</div>`;
+  $$("#roots .root").forEach(el => el.onclick = () => loadFolder(el.dataset.root));
+  $$("#roots button[data-rm]").forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    if (!confirm("从素材库移除该目录？\n（不会删除磁盘文件，只是不再索引）")) return;
+    if (S.loaded && norm(S.loaded) === norm(b.dataset.rm)) unloadFolder();
+    await api("/api/roots", { action: "remove", path: b.dataset.rm });
+    loadState(); loadKinds(); loadFacets();
+  });
 }
 
 async function loadKinds() {
@@ -1657,6 +1670,33 @@ setInterval(() => checkCache(true), 5 * 60 * 1000);   // 每 5 分钟看一眼�
    点了「加载文件夹…」之后：右边只显示这个文件夹里的东西；左边「类型 / 分类」换成浏览模式那套
    （类型＝它的文件类型统计，分类＝它下面的子文件夹），选中一个子文件夹还会统计那个子文件夹。
    右键菜单、批量操作条、复制/剪切/重命名/删除/解压照常能用。 */
+// 「📂 加载根目录…」：列出素材库目录里的根目录，挑一个加载（点左边那一行也行）
+function openRootMenu(ax, ay) {
+  closeCtx();
+  const rs = (S.st && S.st.roots) || [];
+  if (!rs.length) { toast("还没有素材目录，先点「+ 添加素材目录」", "warn", 6000); return; }
+  ctxBox = document.createElement("div");
+  ctxBox.className = "ctxmenu";
+  ctxBox.innerHTML = '<div class="ctxhd">选择要加载的根目录（素材库目录里的）</div>'
+    + rs.map(r => '<div class="mi" data-rootload="' + esc(r.path) + '">📂 ' + esc(r.path) + '</div>').join("")
+    + '<div class="msep"></div>'
+    + '<div class="mi" data-rootload="__all">全部素材（不筛选根目录）</div>'
+    + '<div class="mi" data-rootpick="1">其他文件夹…（临时看看，不加进素材库）</div>';
+  document.body.appendChild(ctxBox);
+  const r = ctxBox.getBoundingClientRect();
+  ctxBox.style.left = Math.max(6, Math.min(ax, innerWidth - r.width - 8)) + "px";
+  ctxBox.style.top = Math.max(6, Math.min(ay, innerHeight - r.height - 8)) + "px";
+  ctxBox.onclick = e => {
+    const mi = e.target.closest(".mi");
+    if (!mi) return;
+    const p = mi.dataset.rootload, pick = mi.dataset.rootpick;
+    closeCtx();
+    if (pick) { pickFolder("选择要加载的文件夹").then(q => { if (q) loadFolder(q); }); return; }
+    if (!p || p === "__all") unloadFolder();
+    else loadFolder(p);
+  };
+}
+
 function syncSideSections() {
   const m = S.mode, on = (m === "lib" && !!S.loaded);
   const t = (id, hide) => { const e = $(id); if (e) e.classList.toggle("hidden", hide); };
@@ -1669,6 +1709,7 @@ function syncSideSections() {
 }
 function syncLoadedUI() {
   syncSideSections();
+  renderRoots();
   if (S.mode !== "lib") return;
   const on = !!S.loaded;
   const lb = $("#loadedBox");
@@ -1684,7 +1725,7 @@ function syncLoadedUI() {
   if (!on) { $("#loadedRow").innerHTML = ""; return; }
   const nm = S.loaded.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || S.loaded;
   $("#loadedRow").innerHTML =
-    '<div class="root" title="' + esc(S.loaded) + '"><span>📂 ' + esc(nm) + '</span>'
+    '<div class="root loaded" title="' + esc(S.loaded) + '"><span>📂 ' + esc(nm) + '</span>'
     + '<button data-unload="1" title="回到素材库">×</button></div>';
   const b = $("#loadedRow [data-unload]");
   if (b) b.onclick = unloadFolder;
@@ -1779,9 +1820,10 @@ $("#btnPrefetch").onclick = async () => {
   pollJobs(true);
 };
 $("#btnSettings").onclick = openSettings;
-$("#btnLoadDir").onclick = async () => {
-  const p = await pickFolder("选择要加载的文件夹");
-  if (p) loadFolder(p);
+$("#btnLoadDir").onclick = e => {
+  e.stopPropagation();          // 别让 document 上「点别处关菜单」的监听立刻把它关掉
+  const r = e.currentTarget.getBoundingClientRect();
+  openRootMenu(r.left, r.bottom + 4);
 };
 $("#btnAddRoot").onclick = async () => {
   const p = await pickFolder("选择要加入素材库的文件夹");
