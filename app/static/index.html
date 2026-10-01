@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小虫管理器 · 本地资源管理器</title>
 <link rel="icon" href="/static/小虫.ico">
-<link rel="stylesheet" href="/static/style.css?v=2.7.5">
+<link rel="stylesheet" href="/static/style.css?v=2.7.6">
 </head>
 <body>
 <header class="topbar">
@@ -46,7 +46,7 @@
         <h4>按文件夹 <span id="folderCount" class="dim"></span></h4>
         <input id="folderFilter" class="miniq" placeholder="筛选文件夹…">
         <div id="folders" class="nav scroll folders"></div>
-        <div class="hint" style="margin-top:8px">当前这一堆按所在文件夹拆开，点一下只看它；再点一下取消。</div>
+        <div class="hint" style="margin-top:8px">当前这一堆按所在文件夹拆开，点一下只看它；再点一下取消。没有文件夹信息的按它的分类归。</div>
       </section>
       <section id="secLibCats">
         <h4>分类 <span id="catCount" class="dim"></span></h4>
@@ -90,6 +90,7 @@
         <label class="chk" title="勾上 = 图片也生成并显示缩略图（补旧图请点右上角「生成缩略图」）；不勾 = 图片走文字列表，点开看原图"><input type="checkbox" id="tbImgThumb"> 图片显示缩略图</label>
         <select id="sort">
           <option value="category">按分类</option>
+          <option value="folder">按文件夹</option>
           <option value="name">按名称 A→Z</option>
           <option value="name_desc">按名称 Z→A</option>
           <option value="kind">按类型</option>
@@ -148,6 +149,6 @@
 <div id="toasts" class="toasts"></div>
 <div id="jobs" class="jobs hidden"></div>
 
-<script src="/static/app.js?v=2.7.5"></script>
+<script src="/static/app.js?v=2.7.6"></script>
 </body>
 </html>

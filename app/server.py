@@ -27,6 +27,11 @@ CLIP = {"paths": [], "mode": "copy"}
 app = FastAPI(title=config.APP_NAME, docs_url=None, redoc_url=None)
 
 
+# 「文件夹」分组键：压缩包里的文件有 folder；散装文件的文件夹名在 category 里，
+# 两个都空才归到空字符串（实测模型 / 图片 / 图纸 / 文档 / 视频都是 0 条分不出组）
+FOLDER_EXPR = "COALESCE(NULLIF(folder,''), NULLIF(category,''), '')"
+
+
 # ------------------------------------------------------------------ 基础
 def _row(r):
     return {k: r[k] for k in r.keys()}
@@ -150,7 +155,8 @@ def api_facets(kind: str = "", category: str = "", style: str = "", q: str = "",
                    "GROUP BY style ORDER BY c DESC")]
     # 按文件夹：跟着当前的「类型 / 分类 / 风格 / 搜索词 / 收藏」走，
     # 这样点开 3D模型（或效果图、图纸）之后，能把这一大堆按所在文件夹拆开
-    where, args = ["folder <> ''"], []
+    fx = FOLDER_EXPR
+    where, args = [f"{fx} <> ''"], []
     if kind == "fav" or fav:
         where.append("favorite = 1")
     elif kind and kind != "all":
@@ -166,10 +172,10 @@ def api_facets(kind: str = "", category: str = "", style: str = "", q: str = "",
                      "OR tags LIKE ? OR origin LIKE ? OR ext LIKE ? OR source_path LIKE ?)")
         args += [like] * 8
     w = " AND ".join(where)
-    folders = [{"value": r["folder"], "count": r["c"]} for r in
-               db.q(f"SELECT folder, COUNT(*) c FROM assets WHERE {w} "
-                    f"GROUP BY folder ORDER BY c DESC, folder COLLATE NOCASE ASC LIMIT 800", tuple(args))]
-    folder_total = db.count(f"SELECT COUNT(DISTINCT folder) FROM assets WHERE {w}", tuple(args))
+    folders = [{"value": r["g"], "count": r["c"]} for r in
+               db.q(f"SELECT {fx} AS g, COUNT(*) c FROM assets WHERE {w} "
+                    f"GROUP BY g ORDER BY c DESC, g COLLATE NOCASE ASC LIMIT 1200", tuple(args))]
+    folder_total = db.count(f"SELECT COUNT(DISTINCT {fx}) FROM assets WHERE {w}", tuple(args))
     return {"categories": cats, "styles": styles, "folders": folders, "folder_total": folder_total}
 
 
@@ -177,6 +183,7 @@ def api_facets(kind: str = "", category: str = "", style: str = "", q: str = "",
 SORTS = {"name": "name COLLATE NOCASE ASC", "name_desc": "name COLLATE NOCASE DESC",
          "size": "size DESC", "size_asc": "size ASC", "new": "mtime DESC",
          "old": "mtime ASC", "category": "category COLLATE NOCASE ASC, name ASC",
+         "folder": FOLDER_EXPR + " COLLATE NOCASE ASC, name COLLATE NOCASE ASC",
          "kind": "kind ASC, name COLLATE NOCASE ASC", "random": "RANDOM()",
          "fav": "favorite DESC, fav_at DESC, name COLLATE NOCASE ASC"}
 
@@ -193,10 +200,13 @@ def api_assets(q: str = "", kind: str = "", category: str = "", style: str = "",
                      "OR tags LIKE ? OR origin LIKE ? OR ext LIKE ? OR source_path LIKE ?)")
         args += [like] * 8
     for col, val in (("kind", kind), ("category", category), ("style", style),
-                     ("origin", origin), ("folder", folder), ("source_type", source)):
+                     ("origin", origin), ("source_type", source)):
         if val:
             where.append(f"{col} = ?")
             args.append(val)
+    if folder:
+        where.append(f"{FOLDER_EXPR} = ?")
+        args.append(folder)
     if fav:
         where.append("favorite = 1")
     if has_render:
@@ -210,6 +220,7 @@ def api_assets(q: str = "", kind: str = "", category: str = "", style: str = "",
     for r in rows:
         d = _row(r)
         d["preview"] = preview_kind(d.get("orig_name") or d.get("name") or "", d.get("kind") or "")
+        d["grp"] = r["folder"] or r["category"] or ""    # 「按文件夹」分组用
         items.append(d)
     return {"total": total, "offset": offset, "limit": limit, "items": items}
 

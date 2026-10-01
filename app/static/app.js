@@ -350,6 +350,9 @@ function renderFolders(f) {
   const list = (f.folders || []).slice();
   // 选中的文件夹万一不在这次列表里（比如刚换过类型），也钉在最上面，保证能再点一下取消
   if (S.folder && !list.some(x => x.value === S.folder)) list.unshift({ value: S.folder, count: 0 });
+  S.folderCounts = {};
+  (f.folders || []).forEach(x => { S.folderCounts[x.value] = x.count; });
+  if (S.sort === "folder") setTimeout(reRenderLib, 0);   // 统计晚到就把组标题的数字补上
   const cnt = $("#folderCount");
   if (cnt) cnt.textContent = (f.folder_total || list.length) + " 个";
   box.innerHTML = list.map(x =>
@@ -389,6 +392,7 @@ function libItem(a) {
     size: a.size || 0, mtime: a.mtime || 0, is_dir: false, preview: a.preview || "none",
     thumb: "/api/thumb/" + a.id, raw: "/api/raw?id=" + a.id, text: "/api/text?id=" + a.id,
     source_path: a.source_path, inner: a.inner_path || "", category: a.category || "",
+    folder: a.folder || "", grp: a.grp || a.folder || a.category || "",
     style: a.style || "", favorite: a.favorite || 0, fav_at: a.fav_at || 0, render_id: a.render_id || 0,
     origin: a.origin || "", filename: (a.name || "") + (a.ext || ""), from: "lib",
     renderThumb: a.render_id ? "/api/thumb/" + a.render_id + "?size=1400&render=0" : "",
@@ -660,12 +664,35 @@ function crumbText() {
   if (S.q) parts.push("“" + S.q + "”");
   return parts.join(" · ");
 }
+// 「按文件夹」排序：同一文件夹的文件连在一起，每组前面加一行文件夹标题（名字 + 这一组有几个）
+function groupHeadHtml(folder) {
+  const n = (S.folderCounts || {})[folder];
+  return `<div class="groupHead"><span class="gh-name" title="${esc(folder || "(未归类)")}">📁 ${esc(folder || "(未归类)")}</span>`
+    + `<span class="gh-n">${n === undefined ? "" : esc(String(n)) + " 个"}</span></div>`;
+}
+function libGridHtml(items, fromIdx) {
+  if (S.sort !== "folder") return items.map(cardHtml).join("");
+  const out = [];
+  let last = fromIdx > 0 ? (((S.items[fromIdx - 1] || {}).grp) || "") : null;
+  items.forEach(it => {
+    const f = it.grp || "";
+    if (f !== last) { out.push(groupHeadHtml(f)); last = f; }
+    out.push(cardHtml(it));
+  });
+  return out.join("");
+}
+// 重画一遍列表（分组标题要用到分组统计，统计晚到时补一次）
+function reRenderLib() {
+  if (!isLib() || !S.items.length) return;
+  $("#grid").innerHTML = libGridHtml(S.items, 0);
+  bindCards();
+}
 async function reload() {
   S.loading = true; S.offset = 0; S.sel.clear(); S.map = {}; syncSel();
   $("#crumb").textContent = crumbText();
   const d = await api("/api/assets?" + params().toString());
   S.total = d.total; S.items = d.items.map(libItem); S.items.forEach(i => S.map[i.key] = i);
-  $("#grid").innerHTML = S.items.map(cardHtml).join("");
+  $("#grid").innerHTML = libGridHtml(S.items, 0);
   bindCards();
   S.loading = false;
   const fl = [];
@@ -685,8 +712,9 @@ async function loadMore() {
   const d = await api("/api/assets?" + p.toString());
   const items = d.items.map(libItem);
   items.forEach(i => S.map[i.key] = i);
+  const startIdx = S.items.length;
   S.items = S.items.concat(items);
-  $("#grid").insertAdjacentHTML("beforeend", items.map(cardHtml).join(""));
+  $("#grid").insertAdjacentHTML("beforeend", libGridHtml(items, startIdx));
   bindCards();
   S.loading = false;
 }
@@ -2275,6 +2303,15 @@ const io = new IntersectionObserver(es => {
   if (es[0].isIntersecting && isLib() && S.offset + S.limit < S.total) loadMore();
 }, { rootMargin: "700px" });
 io.observe($("#sentinel"));
+// #sentinel 在 #grid 外面，而 #grid 自己才是滚动容器 —— 滚它的时候探针位置压根不动，
+// 那个观察器基本不会触发（结果只看得见前 80 个）。所以再直接听 #grid 的滚动。
+$("#grid").addEventListener("scroll", () => {
+  const g = $("#grid");
+  if (S.loading || !isLib()) return;
+  if (S.offset + S.limit >= S.total) return;
+  if (g.scrollHeight - g.scrollTop - g.clientHeight > 700) return;
+  loadMore();
+});
 
 (async () => {
   setZoom(localStorage.getItem("xc_zoom") || 190);
