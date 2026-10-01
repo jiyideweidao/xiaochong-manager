@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小虫管理器 · 本地资源管理器</title>
 <link rel="icon" href="/static/小虫.ico">
-<link rel="stylesheet" href="/static/style.css?v=2.6.0">
+<link rel="stylesheet" href="/static/style.css?v=2.7.1">
 </head>
 <body>
 <header class="topbar">
@@ -32,12 +32,17 @@
         <h4>素材库目录</h4>
         <div id="roots" class="roots"></div>
         <button id="btnAddRoot" class="link">+ 添加素材目录</button>
+        <button id="btnLoadDir" class="btn sm" style="width:100%;margin-top:6px">📂 加载文件夹…</button>
+        <div id="loadedBox" class="hidden">
+          <div class="roots" id="loadedRow"></div>
+          <div class="hint" style="margin-top:6px">右边只看这个文件夹，左边「类型 / 分类」统计的就是它（选中某个子文件夹就统计那个）。点上面的 × 回素材库。</div>
+        </div>
       </section>
-      <section>
+      <section id="secLibKinds">
         <h4>类型</h4>
         <div id="kinds" class="nav"></div>
       </section>
-      <section>
+      <section id="secLibCats">
         <h4>分类 <span id="catCount" class="dim"></span></h4>
         <input id="catFilter" class="miniq" placeholder="筛选分类…">
         <div id="cats" class="nav scroll"></div>
@@ -48,20 +53,20 @@
       </section>
     </div>
     <div id="sideBrowse" class="hidden">
-      <section>
+      <section id="secPlaces">
         <h4>常用位置</h4>
         <div id="places" class="nav"></div>
       </section>
-      <section>
+      <section id="secDrives">
         <h4>此电脑</h4>
         <div id="drives" class="nav"></div>
       </section>
-      <section>
+      <section id="secDirKinds">
         <h4>类型 <span class="dim" id="dirKindPath"></span></h4>
         <div id="dirKinds" class="nav wrap"></div>
         <div class="hint" style="margin-top:8px">类型：只看当前文件夹里这一类的文件。</div>
       </section>
-      <section>
+      <section id="secDirCats">
         <h4>分类 <span id="dirCatCount" class="dim"></span></h4>
         <input id="dirCatFilter" class="miniq" placeholder="筛选分类…">
         <div id="dirCats" class="nav scroll"></div>
@@ -137,6 +142,6 @@
 <div id="toasts" class="toasts"></div>
 <div id="jobs" class="jobs hidden"></div>
 
-<script src="/static/app.js?v=2.6.0"></script>
+<script src="/static/app.js?v=2.7.1"></script>
 </body>
 </html>

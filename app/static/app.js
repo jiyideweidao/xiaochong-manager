@@ -10,9 +10,12 @@ const S = {
   sort: "category", offset: 0, limit: 80, total: 0, items: [], sel: new Set(), map: {},
   lastIndex: -1, loading: false, st: null, kinds: [], kindMap: {},
   dir: "", dirData: null, dirFilter: "", showHidden: 0, sortDir: "name", dirItems: [],
-  clip: { paths: [], mode: "copy" }, busy: false,
+  clip: { paths: [], mode: "copy" }, busy: false, loaded: "",
 };
 
+// 素材库模式下「已加载文件夹」：加载后右边只看这个文件夹，左边类型/分类也都统计它
+const isLib = () => S.mode === "lib" && !S.loaded;
+function gridItems() { return isLib() ? S.items : S.dirItems; }
 async function api(path, body) {
   const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
   const r = await fetch(path, opt);
@@ -202,6 +205,7 @@ function setMode(m) {
   $("#q").placeholder = m === "lib"
     ? "搜索素材名 / 分类 / 关键词 / 扩展名，如：吊灯、现代、.pdf（按 / 聚焦）"
     : "在当前文件夹里筛选文件名…（按 / 聚焦）";
+  syncLoadedUI();
   S.sel.clear(); S.map = {}; syncSel();
   stop3D();
   $("#drawer").classList.add("hidden");
@@ -210,6 +214,7 @@ function setMode(m) {
     const r0 = ((S.st && S.st.roots[0]) || {}).path || "D:\\";
     browse(S.dir || r0);
   }
+  else if (S.loaded) { renderBrowse(); refreshSideStats(); }
   else reload();
   loadState();
 }
@@ -247,6 +252,7 @@ async function loadState() {
 }
 
 async function loadKinds() {
+  if (S.loaded) return;                      // 加载了文件夹：左侧显示的是它的统计，别覆盖
   const d = await api("/api/kinds");
   S.kinds = d.kinds || [];
   S.kindMap = {}; S.kinds.forEach(k => S.kindMap[k.key] = k);
@@ -264,6 +270,7 @@ async function loadKinds() {
 function renderKinds() { loadKinds(); }
 
 async function loadFacets() {
+  if (S.loaded) return;
   const f = await api("/api/facets");
   $("#catCount").textContent = f.categories.length;
   $("#cats").innerHTML = f.categories.map(c =>
@@ -410,7 +417,7 @@ function bindCards(scope = "#grid") {
     c.onclick = e => {
       const it = it2(key); if (!it) return;
       if (e.target.dataset.q) { quickAct(e.target.dataset.q, it); return; }
-      const list = S.mode === "lib" ? S.items : S.dirItems;
+      const list = gridItems();
       const i = list.findIndex(x => x.key === key);
       if (e.shiftKey && S.lastIndex >= 0) {
         const [a, b] = [Math.min(i, S.lastIndex), Math.max(i, S.lastIndex)];
@@ -426,7 +433,7 @@ function bindCards(scope = "#grid") {
     c.ondblclick = e => { if (!e.target.dataset.q) quickAct(it2(key).is_dir ? "enter" : "open", it2(key)); };
   });
 }
-const it2 = key => S.map[key] || (S.mode === "lib" ? S.items : S.dirItems).find(x => x.key === key);
+const it2 = key => S.map[key] || gridItems().find(x => x.key === key);
 
 /* ---------------- 鼠标右键菜单（二级菜单） ----------------
    卡片上的「打开 / 定位 / 复制」按钮全部收进这里：在卡片上点右键弹出来，
@@ -544,7 +551,7 @@ async function toggleFav(it, btn) {
   if (db2 && S.cur && S.cur.key === it.key) db2.textContent = val ? "★ 取消收藏" : "☆ 收藏";
   refreshFavCount();
   toast(val ? `已加入我的收藏：${it.name}` : `已从我的收藏移除：${it.name}`, "ok", 2600);
-  if (!val && S.mode === "lib" && S.kind === "fav") {   // 在收藏夹里取消收藏，这张卡就该消失
+  if (!val && isLib() && S.kind === "fav") {   // 在收藏夹里取消收藏，这张卡就该消失
     S.sel.delete(it.key); delete S.map[it.key]; syncSel(); reload();
   }
   return r;
@@ -599,7 +606,7 @@ async function loadMore() {
   S.loading = false;
 }
 function emptyState(title, sub) {
-  const has = S.mode === "lib" ? S.items.length : S.dirItems.length;
+  const has = gridItems().length;
   const e = $("#empty");
   e.classList.toggle("hidden", !!has);
   if (!has) e.innerHTML = `<span class="big">🐞</span>${esc(title)}<br><span class="dim">${esc(sub || "")}</span>`;
@@ -617,6 +624,7 @@ async function browse(path) {
   if (d.error) { toast("打不开：" + d.error, "err"); return; }
   if (old && d.path !== old) S.dirFilter = "";
   S.dir = d.path; S.dirData = d;
+  if (S.loaded && S.mode === "lib") S.loaded = d.path;
   $("#pathInput").value = d.path;
   $("#crumbs").innerHTML = (d.crumbs || []).map((c, i) =>
     `${i ? '<span class="sep">›</span>' : ""}<button data-go="${esc(c.path)}">${esc(c.name)}</button>`).join("");
@@ -650,9 +658,11 @@ function renderBrowse() {
   $("#empty").classList.add("hidden");
   $("#selCount").textContent = S.sel.size;
 }
+// 左侧「类型 / 分类」什么时候跟着走：浏览模式，或者素材库里加载了文件夹
+const sideStatsOn = () => S.mode === "browse" || (S.mode === "lib" && !!S.loaded);
 function dirStatTarget() {
-  // 浏览模式里「选中单个文件夹」就统计那个文件夹；没选就是当前打开的这个
-  if (S.mode !== "browse" || S.sel.size !== 1) return null;
+  // 「选中单个文件夹」就统计那个文件夹；没选就是当前打开的这个
+  if (!sideStatsOn() || S.sel.size !== 1) return null;
   const one = S.map[Array.from(S.sel)[0]];
   return one && one.is_dir ? one : null;
 }
@@ -662,7 +672,7 @@ function statKey() {
 }
 let STATSEQ = 0, STATKEY = "";
 function queueSideStats() {
-  if (S.mode !== "browse") return;
+  if (!sideStatsOn()) return;
   if (statKey() === STATKEY) return;
   clearTimeout(queueSideStats._t);
   queueSideStats._t = setTimeout(() => { if (statKey() !== STATKEY) refreshSideStats(); }, 120);
@@ -703,7 +713,7 @@ function renderDirKinds(d, picked) {
   $$("#dirKinds button").forEach(b => b.onclick = async () => {
     const pick = dirStatTarget();
     if (pick && b.dataset.k === "") { S.sel.clear(); S.map = {}; syncSel(); return; }
-    if (pick) { await browse(pick.path); S.dirFilter = b.dataset.k; refreshSideStats(); }
+    if (pick) { await browse(pick.path); S.dirFilter = b.dataset.k; renderBrowse(); refreshSideStats(); }
     else { S.dirFilter = b.dataset.k; renderDirKinds(); renderBrowse(); }
   });
 }
@@ -951,7 +961,7 @@ function actLabel(a, l) {          // 「收藏」按钮跟着选中项状态变
   return items.length && items.every(x => x.favorite) ? "★ 取消收藏" : "☆ 收藏";
 }
 function renderSelActs() {
-  const list = S.mode === "lib" ? LIB_ACTS : FS_ACTS;
+  const list = isLib() ? LIB_ACTS : FS_ACTS;
   $("#selacts").innerHTML = list.map(([a, l, c]) => `<button class="btn ${c}" data-act="${a}">${esc(actLabel(a, l))}</button>`).join("");
   $$("#selacts button").forEach(b => b.onclick = () => doAct(b.dataset.act));
 }
@@ -1057,7 +1067,7 @@ async function doAct(act, one) {
         const db2 = $('#dBody [data-d="fav"]');
         if (db2) db2.textContent = val ? "★ 取消收藏" : "☆ 收藏";
       }
-      if (S.mode === "lib") {
+      if (isLib()) {
         if (!val && S.kind === "fav") { S.sel.clear(); S.map = {}; S.cur = null; reload(); }
         else {
           // 就地更新星星，不刷新整页：不跳滚动条、选中状态也不丢（可以再按 F 取消）
@@ -1635,27 +1645,89 @@ async function pollJobs(immediate) {
     }).join("");
     const busy = list.some(j => j.status === "running");
     if (busy) setTimeout(pollJobs, 1500);
-    else if (window._wasBusy) { loadState(); if (S.mode === "lib") { loadKinds(); loadFacets(); reload(); } }
+    else if (window._wasBusy) { loadState(); if (isLib()) { loadKinds(); loadFacets(); reload(); }
+                  else if (S.loaded) { renderBrowse(); refreshSideStats(); } }
     window._wasBusy = busy;
   } catch (e) { /* ignore */ }
 }
 setInterval(pollJobs, 4000);
 setInterval(() => checkCache(true), 5 * 60 * 1000);   // 每 5 分钟看一眼缓存，到点了就提醒
 
+/* ---------------- 素材库：加载文件夹（分类 / 统计 / 管理 / 浏览） ----------------
+   点了「加载文件夹…」之后：右边只显示这个文件夹里的东西；左边「类型 / 分类」换成浏览模式那套
+   （类型＝它的文件类型统计，分类＝它下面的子文件夹），选中一个子文件夹还会统计那个子文件夹。
+   右键菜单、批量操作条、复制/剪切/重命名/删除/解压照常能用。 */
+function syncSideSections() {
+  const m = S.mode, on = (m === "lib" && !!S.loaded);
+  const t = (id, hide) => { const e = $(id); if (e) e.classList.toggle("hidden", hide); };
+  // 素材库里加载了文件夹：左栏只留「素材库目录 / 加载文件夹」，类型、分类换成浏览模式那套
+  // （统计跟着这个文件夹走，选中某个子文件夹就统计那个文件夹）
+  t("#secLibKinds", on); t("#secLibCats", on);
+  t("#secPlaces", on); t("#secDrives", on);
+  t("#secDirKinds", false); t("#secDirCats", false);
+  $("#sideBrowse").classList.toggle("hidden", m !== "browse" && !on);
+}
+function syncLoadedUI() {
+  syncSideSections();
+  if (S.mode !== "lib") return;
+  const on = !!S.loaded;
+  const lb = $("#loadedBox");
+  if (lb) lb.classList.toggle("hidden", !on);
+  $("#tbLib").classList.toggle("hidden", on);
+  $("#tbBrowse").classList.toggle("hidden", !on);
+  $("#crumbs").classList.toggle("hidden", !on);
+  $("#styleBox").classList.toggle("hidden", on);
+  const q = $("#q");
+  if (q) q.placeholder = on
+    ? "在这个文件夹里筛选文件名…（按 / 聚焦）"
+    : "搜索素材名 / 分类 / 关键词 / 扩展名，如：吊灯、现代、.pdf（按 / 聚焦）";
+  if (!on) { $("#loadedRow").innerHTML = ""; return; }
+  const nm = S.loaded.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || S.loaded;
+  $("#loadedRow").innerHTML =
+    '<div class="root" title="' + esc(S.loaded) + '"><span>📂 ' + esc(nm) + '</span>'
+    + '<button data-unload="1" title="回到素材库">×</button></div>';
+  const b = $("#loadedRow [data-unload]");
+  if (b) b.onclick = unloadFolder;
+}
+
+// 加载一个文件夹：右侧变成它的内容，左侧类型/分类都按它算
+async function loadFolder(path) {
+  if (!path) return;
+  if (S.mode !== "lib") setMode("lib");
+  const before = S.dirData, keep = S.loaded;
+  S.loaded = path; S.dirFilter = "";
+  await browse(path);
+  if (S.dirData === before) {            // 没换成新目录 = 打不开（browse 已经提示过）
+    S.loaded = keep; syncLoadedUI(); loadKinds(); loadFacets(); reload();
+    return;
+  }
+  syncLoadedUI();
+  refreshSideStats();
+}
+
+// 回到素材库（只看全库）
+function unloadFolder() {
+  if (!S.loaded) return;
+  S.loaded = ""; S.dirFilter = ""; S.dir = ""; S.dirData = null; S.dirItems = [];
+  S.sel.clear(); S.map = {}; syncSel();
+  syncLoadedUI();
+  loadKinds(); loadFacets(); reload();
+}
+
 /* ---------------- 工具条 ---------------- */
 function selectAll() {
-  const list = S.mode === "lib" ? S.items : S.dirItems;
+  const list = gridItems();
   list.forEach(i => { S.sel.add(i.key); S.map[i.key] = i; });
   syncSel();
 }
 const debounce = (fn, ms = 300) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
 const onSearch = debounce(() => {
-  if (S.mode === "lib") { S.offset = 0; reload(); }
+  if (isLib()) { S.offset = 0; reload(); }
   else renderBrowse();
 }, 280);
 
 $("#q").oninput = e => { S.q = e.target.value; onSearch(); };
-$("#qclear").onclick = () => { $("#q").value = ""; S.q = ""; S.mode === "lib" ? reload() : renderBrowse(); };
+$("#qclear").onclick = () => { $("#q").value = ""; S.q = ""; isLib() ? reload() : renderBrowse(); };
 $("#sort").onchange = e => { S.sort = e.target.value; S.offset = 0; reload(); };
 $("#onlyRender").onchange = e => { S.onlyRender = e.target.checked ? 1 : 0; S.offset = 0; reload(); };
 // 图片缩略图开关（就在「只看带效果图」旁边）：勾了图片才生成/显示缩略图，不勾就出文字列表、点开看原图
@@ -1667,7 +1739,7 @@ $("#tbImgThumb").onchange = async e => {
   toast(on
     ? "图片缩略图已打开：翻到哪张就补哪张。想一次性全生成，点右上角「生成缩略图」。"
     : "图片缩略图已关闭：图片改成文字列表，点开直接看原图，省缓存也更快。", "ok", 9000);
-  if (S.mode === "lib") reload(); else renderBrowse();
+  if (isLib()) reload(); else renderBrowse();
   loadState();
 };
 function setZoom(v) {
@@ -1707,6 +1779,10 @@ $("#btnPrefetch").onclick = async () => {
   pollJobs(true);
 };
 $("#btnSettings").onclick = openSettings;
+$("#btnLoadDir").onclick = async () => {
+  const p = await pickFolder("选择要加载的文件夹");
+  if (p) loadFolder(p);
+};
 $("#btnAddRoot").onclick = async () => {
   const p = await pickFolder("选择要加入素材库的文件夹");
   if (!p) return;
@@ -1992,7 +2068,7 @@ window.addEventListener("hashchange", () => {
 
 /* ---------------- 首屏 ---------------- */
 const io = new IntersectionObserver(es => {
-  if (es[0].isIntersecting && S.mode === "lib" && S.offset + S.limit < S.total) loadMore();
+  if (es[0].isIntersecting && isLib() && S.offset + S.limit < S.total) loadMore();
 }, { rootMargin: "700px" });
 io.observe($("#sentinel"));
 
