@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小虫管理器 · 本地资源管理器</title>
 <link rel="icon" href="/static/小虫.ico">
-<link rel="stylesheet" href="/static/style.css?v=2.7.4">
+<link rel="stylesheet" href="/static/style.css?v=2.7.5">
 </head>
 <body>
 <header class="topbar">
@@ -41,6 +41,12 @@
       <section id="secLibKinds">
         <h4>类型</h4>
         <div id="kinds" class="nav"></div>
+      </section>
+      <section id="secLibFolders">
+        <h4>按文件夹 <span id="folderCount" class="dim"></span></h4>
+        <input id="folderFilter" class="miniq" placeholder="筛选文件夹…">
+        <div id="folders" class="nav scroll folders"></div>
+        <div class="hint" style="margin-top:8px">当前这一堆按所在文件夹拆开，点一下只看它；再点一下取消。</div>
       </section>
       <section id="secLibCats">
         <h4>分类 <span id="catCount" class="dim"></span></h4>
@@ -142,6 +148,6 @@
 <div id="toasts" class="toasts"></div>
 <div id="jobs" class="jobs hidden"></div>
 
-<script src="/static/app.js?v=2.7.4"></script>
+<script src="/static/app.js?v=2.7.5"></script>
 </body>
 </html>

@@ -140,17 +140,37 @@ def api_kinds():
 
 
 @app.get("/api/facets")
-def api_facets():
+def api_facets(kind: str = "", category: str = "", style: str = "", q: str = "", fav: int = 0):
+    # 分类 / 风格：还是按「模型」统计（原来就这样，别改语义）
     cats = [{"value": r["category"], "count": r["c"]} for r in
             db.q("SELECT category, COUNT(*) c FROM assets WHERE kind='model' AND category<>'' "
                  "GROUP BY category ORDER BY c DESC")]
     styles = [{"value": r["style"], "count": r["c"]} for r in
               db.q("SELECT style, COUNT(*) c FROM assets WHERE kind='model' AND style<>'' "
                    "GROUP BY style ORDER BY c DESC")]
+    # 按文件夹：跟着当前的「类型 / 分类 / 风格 / 搜索词 / 收藏」走，
+    # 这样点开 3D模型（或效果图、图纸）之后，能把这一大堆按所在文件夹拆开
+    where, args = ["folder <> ''"], []
+    if kind == "fav" or fav:
+        where.append("favorite = 1")
+    elif kind and kind != "all":
+        where.append("kind = ?")
+        args.append(kind)
+    for col, val in (("category", category), ("style", style)):
+        if val:
+            where.append(f"{col} = ?")
+            args.append(val)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        where.append("(name LIKE ? OR orig_name LIKE ? OR folder LIKE ? OR category LIKE ? "
+                     "OR tags LIKE ? OR origin LIKE ? OR ext LIKE ? OR source_path LIKE ?)")
+        args += [like] * 8
+    w = " AND ".join(where)
     folders = [{"value": r["folder"], "count": r["c"]} for r in
-               db.q("SELECT folder, COUNT(*) c FROM assets WHERE kind='model' AND folder<>'' "
-                    "GROUP BY folder ORDER BY c DESC LIMIT 200")]
-    return {"categories": cats, "styles": styles, "folders": folders}
+               db.q(f"SELECT folder, COUNT(*) c FROM assets WHERE {w} "
+                    f"GROUP BY folder ORDER BY c DESC, folder COLLATE NOCASE ASC LIMIT 800", tuple(args))]
+    folder_total = db.count(f"SELECT COUNT(DISTINCT folder) FROM assets WHERE {w}", tuple(args))
+    return {"categories": cats, "styles": styles, "folders": folders, "folder_total": folder_total}
 
 
 # ------------------------------------------------------------------ 列表

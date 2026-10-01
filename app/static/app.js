@@ -6,7 +6,7 @@ const fmtSize = n => !n && n !== 0 ? "-" : n === 0 ? "0 B" : n > 1073741824 ? (n
 const fmtTime = t => !t ? "-" : new Date(t * 1000).toLocaleString("zh-CN", { hour12: false });
 
 const S = {
-  mode: "lib", q: "", kind: "all", category: "", style: "", fav: 0, onlyRender: 0,
+  mode: "lib", q: "", kind: "all", category: "", style: "", folder: "", fav: 0, onlyRender: 0,
   sort: "category", offset: 0, limit: 80, total: 0, items: [], sel: new Set(), map: {},
   lastIndex: -1, loading: false, st: null, kinds: [], kindMap: {},
   dir: "", dirData: null, dirFilter: "", showHidden: 0, sortDir: "name", dirItems: [],
@@ -291,8 +291,9 @@ async function loadKinds() {
     `<button data-kind="${k}" class="${S.kind === k ? "on" : ""}"><span class="kl"><i class="dot" style="background:${col}"></i>${esc(label)}</span><span class="n">${n ?? ""}</span></button>`).join("");
   $$("#kinds button").forEach(b => b.onclick = () => {
     S.kind = b.dataset.kind; S.offset = 0; S.sel.clear(); S.map = {}; syncSel();
+    S.folder = "";                       // 换了类型，「按文件夹」分组跟着换一套
     if (S.mode === "browse") { S.dirFilter = S.kind === "all" ? "" : S.kind; renderBrowse(); }
-    else { renderKinds(); reload(); }
+    else { loadFacets(); renderKinds(); reload(); }
   });
   return d;
 }
@@ -300,13 +301,21 @@ function renderKinds() { loadKinds(); }
 
 async function loadFacets() {
   if (S.loaded) return;
-  const f = await api("/api/facets");
+  // 分类 / 风格 / 按文件夹 都跟着当前筛选走：点了「3D 模型」就只统计模型，
+  // 搜了词就只统计命中的那一堆，这样「按文件夹」才是你眼前这堆文件的文件夹
+  const p = new URLSearchParams();
+  if (S.kind && S.kind !== "all") p.set("kind", S.kind);
+  if (S.category) p.set("category", S.category);
+  if (S.style) p.set("style", S.style);
+  if (S.q.trim()) p.set("q", S.q.trim());
+  const f = await api("/api/facets?" + p.toString());
   $("#catCount").textContent = f.categories.length;
   $("#cats").innerHTML = f.categories.map(c =>
     `<button data-cat="${esc(c.value)}" class="${S.category === c.value ? "on" : ""}"><span>${esc(c.value)}</span><span class="n">${c.count}</span></button>`).join("");
   $("#styles").innerHTML = f.styles.map(s =>
     `<button data-style="${esc(s.value)}" class="${S.style === s.value ? "on" : ""}">${esc(s.value)} <span class="n">${s.count}</span></button>`).join("")
     || `<span class="dim" style="font-size:12px">暂无风格标签</span>`;
+  renderFolders(f);
   const wire = (sel, attr, key) => $$(sel).forEach(b => b.onclick = () => {
     const v = b.dataset[attr];
     const off = S[key] === v;
@@ -325,6 +334,43 @@ async function loadFacets() {
   if (dcf && !dcf._wired) { dcf._wired = 1; dcf.oninput = () => refreshSideStats(); }
 }
 
+// 文件夹标签可能很长（如「【03】精选家装CAD图库(非动态） / 【013】中式CAD图库合集」），
+// 太长就留住尾巴（叶子文件夹最有用），完整名字放 title 里，鼠标悬停看全
+// 文件夹标签可能很长：多段路径只留最后一段（叶子文件夹最有用），前面用 …/ 表示还有上层；
+// 单段的就整条显示，太宽由 CSS 收尾省略号。完整名字都在 title 里，鼠标悬停能看全
+function shortFolder(s) {
+  const t = (s || "").trim();
+  const parts = t.split(" / ");
+  return parts.length > 1 ? "\u2026/ " + parts[parts.length - 1].trim() : t;
+}
+// 左侧「按文件夹」：把当前这堆文件按所在文件夹拆开，点一下只看那个文件夹
+function renderFolders(f) {
+  const box = $("#folders");
+  if (!box) return;
+  const list = (f.folders || []).slice();
+  // 选中的文件夹万一不在这次列表里（比如刚换过类型），也钉在最上面，保证能再点一下取消
+  if (S.folder && !list.some(x => x.value === S.folder)) list.unshift({ value: S.folder, count: 0 });
+  const cnt = $("#folderCount");
+  if (cnt) cnt.textContent = (f.folder_total || list.length) + " 个";
+  box.innerHTML = list.map(x =>
+    `<button data-folder="${esc(x.value)}" class="${S.folder === x.value ? "on" : ""}" title="${esc(x.value)}">`
+    + `<span>${esc(shortFolder(x.value))}</span><span class="n">${x.count || ""}</span></button>`).join("")
+    || `<span class="dim" style="font-size:12px">这类文件没有文件夹信息</span>`;
+  $$("#folders button").forEach(b => b.onclick = () => {
+    const v = b.dataset.folder;
+    S.folder = S.folder === v ? "" : v;
+    S.offset = 0; loadFacets(); reload();
+  });
+  const ff = $("#folderFilter");
+  if (ff && !ff._wired) { ff._wired = 1; ff.oninput = filterFolderButtons; }
+  filterFolderButtons();
+}
+function filterFolderButtons() {
+  const v = ((($("#folderFilter") || {}).value) || "").trim().toLowerCase();
+  $$("#folders button").forEach(b => {
+    b.style.display = !v || (b.dataset.folder || "").toLowerCase().includes(v) ? "" : "none";
+  });
+}
 async function loadPlaces() {
   const d = await api("/api/places");
   $("#places").innerHTML = (d.places || []).map(p =>
@@ -600,6 +646,7 @@ function params() {
   else if (S.kind && S.kind !== "all") p.set("kind", S.kind);
   if (S.category) p.set("category", S.category);
   if (S.style) p.set("style", S.style);
+  if (S.folder) p.set("folder", S.folder);
   if (S.onlyRender) p.set("has_render", 1);
   return p;
 }
@@ -609,6 +656,7 @@ function crumbText() {
   parts.push(S.kind === "all" ? "全部文件" : S.kind === "fav" ? "我的收藏" : (km ? km.label : S.kind));
   if (S.category) parts.push(S.category);
   if (S.style) parts.push(S.style);
+  if (S.folder) parts.push("\u{1F4C1} " + S.folder);
   if (S.q) parts.push("“" + S.q + "”");
   return parts.join(" · ");
 }
@@ -620,7 +668,13 @@ async function reload() {
   $("#grid").innerHTML = S.items.map(cardHtml).join("");
   bindCards();
   S.loading = false;
-  emptyState("没有找到匹配的素材", "试试换个关键词，或点右上角「扫描素材库」");
+  const fl = [];
+  if (S.folder) fl.push("文件夹「" + S.folder + "」");
+  if (S.category) fl.push("分类「" + S.category + "」");
+  if (S.style) fl.push("风格「" + S.style + "」");
+  emptyState("没有找到匹配的素材", fl.length
+    ? "现在还筛着 " + fl.join("、") + "，点左侧那一条就能取消"
+    : "试试换个关键词，或点右上角「扫描素材库」");
   renderKinds();
 }
 async function loadMore() {
@@ -1791,7 +1845,7 @@ function syncSideSections() {
   const t = (id, hide) => { const e = $(id); if (e) e.classList.toggle("hidden", hide); };
   // 素材库里加载了文件夹：左栏只留「素材库目录 / 加载文件夹」，类型、分类换成浏览模式那套
   // （统计跟着这个文件夹走，选中某个子文件夹就统计那个文件夹）
-  t("#secLibKinds", on); t("#secLibCats", on);
+  t("#secLibKinds", on); t("#secLibCats", on); t("#secLibFolders", on);
   t("#secPlaces", on); t("#secDrives", on);
   t("#secDirKinds", false); t("#secDirCats", false);
   $("#sideBrowse").classList.toggle("hidden", m !== "browse" && !on);
@@ -1865,7 +1919,7 @@ function selectAll() {
 }
 const debounce = (fn, ms = 300) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
 const onSearch = debounce(() => {
-  if (isLib()) { S.offset = 0; reload(); }
+  if (isLib()) { S.offset = 0; loadFacets(); reload(); }
   else if (S.mode === "lib" && S.loaded) applyFsSearch();   // 加载了根目录：在它里面（含子文件夹）递归搜
   else renderBrowse();
 }, 280);

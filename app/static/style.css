@@ -63,6 +63,7 @@ button,input,select{font:inherit;color:inherit}
 .nav.wrap button{width:auto;padding:4px 9px;border:1px solid var(--line);font-size:12.5px}
 .nav.wrap button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
 .roots{display:flex;flex-direction:column;gap:2px;margin-bottom:6px;max-height:170px;overflow-y:auto;overflow-x:hidden}
+.nav.folders button>:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .root{display:flex;align-items:center;gap:6px;font-size:12.5px;padding:4px 6px;border-radius:6px;
   background:#f7f8fa;color:#3a4048}
 .root span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
