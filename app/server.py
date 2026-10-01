@@ -887,6 +887,15 @@ def api_browse(path: str = "", hidden: int = 0, limit: int = Query(4000, le=2000
     return data
 
 
+@app.get("/api/fs/groups")
+def api_fs_groups(path: str = "", hidden: int = 0, limit: int = Query(400, le=2000)):
+    """浏览模式左侧「分类」：当前文件夹里的子文件夹 + 各自里面的文件数量。"""
+    p = fsops.norm(path) if path else ""
+    if not p or not os.path.isdir(p):
+        return {"path": p, "groups": [], "error": "目录不存在" if p else ""}
+    return fsops.subfolder_stats(p, bool(hidden), limit)
+
+
 @app.post("/api/fs/open")
 def api_fs_open(payload: dict = Body(...)):
     ok, msg = fsops.open_path(payload.get("path") or "", payload.get("mode") or "open")

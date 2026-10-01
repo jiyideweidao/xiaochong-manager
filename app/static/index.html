@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>小虫管理器 · 本地资源管理器</title>
 <link rel="icon" href="/static/小虫.ico">
-<link rel="stylesheet" href="/static/style.css?v=2.5.0">
+<link rel="stylesheet" href="/static/style.css?v=2.6.0">
 </head>
 <body>
 <header class="topbar">
@@ -57,9 +57,15 @@
         <div id="drives" class="nav"></div>
       </section>
       <section>
-        <h4>本目录类型</h4>
+        <h4>类型 <span class="dim" id="dirKindPath"></span></h4>
         <div id="dirKinds" class="nav wrap"></div>
-        <div class="hint" style="margin-top:8px">点类型可只看该类文件。<br>双击文件用系统默认程序打开。</div>
+        <div class="hint" style="margin-top:8px">类型：只看当前文件夹里这一类的文件。</div>
+      </section>
+      <section>
+        <h4>分类 <span id="dirCatCount" class="dim"></span></h4>
+        <input id="dirCatFilter" class="miniq" placeholder="筛选分类…">
+        <div id="dirCats" class="nav scroll"></div>
+        <div class="hint" style="margin-top:8px">分类＝当前文件夹下的子文件夹，点一下进去。<br>双击文件用系统默认程序打开。</div>
       </section>
     </div>
     <section class="stat" id="stats"></section>
@@ -131,6 +137,6 @@
 <div id="toasts" class="toasts"></div>
 <div id="jobs" class="jobs hidden"></div>
 
-<script src="/static/app.js?v=2.5.0"></script>
+<script src="/static/app.js?v=2.6.0"></script>
 </body>
 </html>

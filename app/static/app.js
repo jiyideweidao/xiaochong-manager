@@ -285,6 +285,8 @@ async function loadFacets() {
     const v = e.target.value.trim();
     $$("#cats button").forEach(b => b.style.display = !v || b.textContent.includes(v) ? "" : "none");
   };
+  const dcf = $("#dirCatFilter");
+  if (dcf && !dcf._wired) { dcf._wired = 1; dcf.oninput = () => refreshSideStats(); }
 }
 
 async function loadPlaces() {
@@ -515,6 +517,7 @@ function syncSel() {
   $("#selbar").classList.toggle("hidden", S.sel.size === 0);
   $("#selCount").textContent = S.sel.size;
   renderSelActs();
+  queueSideStats();
 }
 function selItems() { return [...S.sel].map(it2).filter(Boolean); }
 
@@ -612,13 +615,14 @@ async function browse(path) {
     d = await api("/api/browse?path=" + encodeURIComponent(path || "") + "&hidden=" + S.showHidden);
   } catch (e) { toast("打开目录失败：" + e.message, "err"); if (old) $("#pathInput").value = old; return; }
   if (d.error) { toast("打不开：" + d.error, "err"); return; }
+  if (old && d.path !== old) S.dirFilter = "";
   S.dir = d.path; S.dirData = d;
   $("#pathInput").value = d.path;
   $("#crumbs").innerHTML = (d.crumbs || []).map((c, i) =>
     `${i ? '<span class="sep">›</span>' : ""}<button data-go="${esc(c.path)}">${esc(c.name)}</button>`).join("");
   $$("#crumbs button").forEach(b => b.onclick = () => browse(b.dataset.go));
   renderBrowse();
-  renderDirKinds();
+  refreshSideStats();
 }
 function sortDirItems(items) {
   const by = S.sortDir;
@@ -646,14 +650,87 @@ function renderBrowse() {
   $("#empty").classList.add("hidden");
   $("#selCount").textContent = S.sel.size;
 }
-function renderDirKinds() {
-  const d = S.dirData;
+function dirStatTarget() {
+  // 浏览模式里「选中单个文件夹」就统计那个文件夹；没选就是当前打开的这个
+  if (S.mode !== "browse" || S.sel.size !== 1) return null;
+  const one = S.map[Array.from(S.sel)[0]];
+  return one && one.is_dir ? one : null;
+}
+function statKey() {
+  const p = dirStatTarget();
+  return p ? "S:" + p.path : "D:" + (S.dir || "");
+}
+let STATSEQ = 0, STATKEY = "";
+function queueSideStats() {
+  if (S.mode !== "browse") return;
+  if (statKey() === STATKEY) return;
+  clearTimeout(queueSideStats._t);
+  queueSideStats._t = setTimeout(() => { if (statKey() !== STATKEY) refreshSideStats(); }, 120);
+}
+async function refreshSideStats() {
+  const seq = ++STATSEQ;
+  const pick = dirStatTarget();
+  const target = pick ? pick.path : (S.dir || "");
+  STATKEY = statKey();
+  if (!target) {
+    $("#dirKinds").innerHTML = ""; $("#dirCats").innerHTML = "";
+    if ($("#dirCatCount")) $("#dirCatCount").textContent = "";
+    if ($("#dirKindPath")) $("#dirKindPath").textContent = "";
+    return;
+  }
+  let d = null, g = null;
+  try {
+    d = (target === S.dir && S.dirData)
+      ? S.dirData
+      : await api("/api/browse?path=" + encodeURIComponent(target) + "&hidden=" + S.showHidden + "&limit=1");
+    g = await api("/api/fs/groups?path=" + encodeURIComponent(target) + "&hidden=" + S.showHidden);
+  } catch (e) { /* 打不开就按空处理 */ }
+  if (seq !== STATSEQ) return;
+  renderDirKinds(d, pick ? pick.name : "");
+  renderDirCats(g, pick ? pick.name : "");
+}
+function renderDirKinds(d, picked) {
+  d = d || S.dirData;
   const counts = (d && d.counts) || {};
-  const items = [["", "全部", (d.files || []).length, "#374151"]]
+  let totalFiles = 0;
+  Object.keys(counts).forEach(k => { totalFiles += counts[k]; });
+  const nm = (d && d.path) ? (d.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || d.path) : "";
+  if ($("#dirKindPath")) $("#dirKindPath").textContent = picked ? ("选中 " + picked) : nm;
+  const items = [["", "全部", totalFiles, "#374151"]]
     .concat(Object.keys(counts).sort((a, b) => counts[b] - counts[a]).map(k => [k, kindLabel(k), counts[k], kindColor(k)]));
   $("#dirKinds").innerHTML = items.map(([k, label, n, col]) =>
     `<button data-k="${k}" class="${S.dirFilter === k ? "on" : ""}"><i class="dot" style="background:${col}"></i>${esc(label)} <span class="n">${n}</span></button>`).join("");
-  $$("#dirKinds button").forEach(b => b.onclick = () => { S.dirFilter = b.dataset.k; renderDirKinds(); renderBrowse(); });
+  $$("#dirKinds button").forEach(b => b.onclick = async () => {
+    const pick = dirStatTarget();
+    if (pick && b.dataset.k === "") { S.sel.clear(); S.map = {}; syncSel(); return; }
+    if (pick) { await browse(pick.path); S.dirFilter = b.dataset.k; refreshSideStats(); }
+    else { S.dirFilter = b.dataset.k; renderDirKinds(); renderBrowse(); }
+  });
+}
+
+/* 浏览模式左侧「分类」：跟着你选中 / 打开的文件夹走，列出里面的子文件夹，点一下进去 */
+function renderDirCats(g, picked) {
+  const box = $("#dirCats");
+  if (!box) return;
+  const groups = (g && g.groups) || [];
+  S.dirCats = groups;
+  const badge = $("#dirCatCount");
+  if (badge) badge.textContent = (picked ? "选中 " + picked + " · " : "") + (groups.length ? groups.length + " 个" : "");
+  const kw = (($("#dirCatFilter") || {}).value || "").trim().toLowerCase();
+  const shown = kw ? groups.filter(x => x.name.toLowerCase().includes(kw)) : groups;
+  if (!shown.length) {
+    box.innerHTML = '<div class="dim" style="font-size:12px;padding:4px 2px">'
+      + (groups.length ? "没有匹配的分类" : "这个文件夹里没有子文件夹，文件都直接列在右边了") + "</div>";
+    return;
+  }
+  box.innerHTML = shown.map(x =>
+    '<button data-catgo="' + esc(x.path) + '" title="' + esc(x.path) + '">'
+    + '<span class="kl">' + (x.dirs ? "📂" : "📁") + " " + esc(x.name) + "</span>"
+    + '<span class="n">' + x.files + "</span></button>").join("")
+    + (g && g.truncated
+        ? '<div class="dim" style="font-size:11px;padding:4px 2px">文件夹太多，只统计了前面几个。点右上角「刷新」可重算。</div>'
+        : "");
+  $$("#dirCats button").forEach(b => b.onclick = () => browse(b.dataset.catgo));
 }
 
 /* ---------------- 详情抽屉 ---------------- */

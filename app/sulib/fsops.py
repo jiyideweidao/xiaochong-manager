@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """资源管理器操作：浏览任意目录、复制/粘贴/剪切、回收站、压缩、打开任意文件。"""
+import glob
 import os
 import re
 import shutil
@@ -129,6 +130,62 @@ def list_dir(path: str, show_hidden: bool = False, limit: int = 4000):
             "total": len(dirs) + len(files), "counts": counts,
             "free": (shutil.disk_usage(os.path.splitdrive(path)[0] + "\\").free
                      if os.path.splitdrive(path)[0] else 0)}
+
+
+def subfolder_stats(path: str, show_hidden: bool = False, limit: int = 400,
+                    secs: float = 3.0) -> dict:
+    """浏览模式左侧「分类」用：把当前文件夹下的子文件夹逐个点一遍，数里面有多少个文件。
+
+    只往下数两层，而且有时间上限；到点就停，只返回已经数好的部分，
+    绝不会让界面卡住（大盘第一层就是全盘时，时间到了就跳出）。
+    """
+    if not os.path.isdir(path):
+        return {"path": path, "groups": [], "truncated": False}
+    t0 = time.time()
+    truncated = False
+    try:
+        names = sorted(os.listdir(path), key=lambda x: x.lower())
+    except OSError as e:
+        return {"path": path, "groups": [], "error": str(e), "truncated": False}
+    out = []
+    for name in names:
+        if len(out) >= limit or time.time() - t0 > secs:
+            truncated = True
+            break
+        full = os.path.join(path, name)
+        try:
+            if not os.path.isdir(full):
+                continue
+            if not show_hidden and is_hidden(full):
+                continue
+        except OSError:
+            continue
+        files = dirs = 0
+        stack = [(full, 0)]
+        while stack:
+            cur, depth = stack.pop()
+            try:
+                it = os.scandir(cur)
+            except OSError:
+                continue
+            with it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            dirs += 1
+                            if depth < 1:
+                                stack.append((e.path, depth + 1))
+                        else:
+                            files += 1
+                    except OSError:
+                        continue
+            if time.time() - t0 > secs:
+                truncated = True
+                break
+        out.append({"name": textutil.repair(name), "path": full,
+                    "files": files, "dirs": dirs})
+    out.sort(key=lambda g: (-g["files"], g["name"].lower()))
+    return {"path": path, "groups": out, "truncated": truncated}
 
 
 def crumbs(path: str):
@@ -474,6 +531,7 @@ _FRIENDLY_NAMES = {
     "xnview": "XnView", "jpegview": "JPEGView", "photos": "Windows 照片",
     "rundll32": "Windows 照片查看器",
     "cadreader": "CAD快速看图", "cadreader-editor": "CAD快速看图（编辑器）",
+    "geeplayer": "爱奇艺万能播放器", "qyclient": "爱奇艺",
 }
 
 
@@ -643,20 +701,125 @@ def cad_reader_exe() -> str:
     return ""
 
 
+# ------------------------------------- 内置默认程序：视频 → 爱奇艺万能播放器
+# 用户装的位置带版本号（GeePlayer\<版本>\GeePlayer.exe），所以先写死几处常见路径，
+# 再用通配把「版本号变了」这种情况兜住，最后还能从卸载表里反查安装目录。
+GEEPLAYER_CANDIDATES = (
+    r"D:\360安全浏览器下载\IQIYI Video\GeePlayer\7.4.0.5866\GeePlayer.exe",
+    r"D:\360安全浏览器下载\IQIYI Video\GeePlayer\GeePlayer.exe",
+    r"C:\Program Files\IQIYI Video\GeePlayer\GeePlayer.exe",
+    r"C:\Program Files (x86)\IQIYI Video\GeePlayer\GeePlayer.exe",
+    r"D:\Program Files\IQIYI Video\GeePlayer\GeePlayer.exe",
+    r"D:\Program Files (x86)\IQIYI Video\GeePlayer\GeePlayer.exe",
+)
+
+GEEPLAYER_GLOBS = (
+    r"D:\360安全浏览器下载\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+    r"C:\Program Files\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+    r"C:\Program Files (x86)\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+    r"D:\Program Files\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+    r"D:\Program Files (x86)\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+    r"D:\*\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+    r"C:\Users\*\AppData\Local\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+    r"C:\Users\*\AppData\Roaming\IQIYI Video\GeePlayer\*\GeePlayer.exe",
+)
+
+# 视频类型的展示顺序（只影响设置界面里的显示，判断仍用 config.VIDEO_EXT 全量）
+VIDEO_EXT_ORDER = (".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".rmvb", ".rm",
+                   ".m4v", ".mpg", ".mpeg", ".webm", ".3gp", ".ts", ".mts",
+                   ".m2ts", ".vob")
+
+
+def _uninstall_icon_exe(keyword: str, exe_name: str) -> str:
+    """从「程序和功能」的卸载表里反查安装位置：DisplayName 含 keyword、DisplayIcon 指向 exe_name。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+    except Exception:
+        return ""
+    roots = (
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE,
+         r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_CURRENT_USER,
+         r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+    )
+    want = exe_name.lower()
+    for hive, sub in roots:
+        try:
+            k = winreg.OpenKey(hive, sub)
+        except OSError:
+            continue
+        try:
+            n = winreg.QueryInfoKey(k)[0]
+            for i in range(n):
+                try:
+                    kk = winreg.OpenKey(k, winreg.EnumKey(k, i))
+                except OSError:
+                    continue
+                try:
+                    disp = str(winreg.QueryValueEx(kk, "DisplayName")[0] or "")
+                    if keyword.lower() in disp.lower():
+                        icon = str(winreg.QueryValueEx(kk, "DisplayIcon")[0] or "")
+                        exe = icon.split(",")[0].strip().strip('"')
+                        if exe.lower().endswith(want) and os.path.isfile(exe):
+                            return exe
+                except OSError:
+                    pass
+                finally:
+                    try:
+                        kk.Close()
+                    except Exception:
+                        pass
+        finally:
+            try:
+                k.Close()
+            except Exception:
+                pass
+    return ""
+
+
+def geeplayer_exe() -> str:
+    """找「爱奇艺万能播放器」(GeePlayer.exe)：常见路径 → 通配版本目录 → 卸载表反查。"""
+    for c in GEEPLAYER_CANDIDATES:
+        if os.path.isfile(c):
+            return c
+    for pat in GEEPLAYER_GLOBS:
+        try:
+            hits = sorted(glob.glob(pat), reverse=True)
+        except Exception:
+            continue
+        for hit in hits:
+            if os.path.isfile(hit):
+                return hit
+    return _uninstall_icon_exe("爱奇艺", "GeePlayer.exe")
+
+
 def builtin_program(ext: str) -> str:
-    """内置认的默认程序：CAD 图纸 → CAD 快速看图（本机没装就返回空，回落到系统默认）。"""
-    if config.norm_ext(ext) in CAD_EXT:
+    """内置认的默认程序：CAD 图纸 → CAD 快速看图；视频 → 爱奇艺万能播放器。
+    本机没装就返回空（会回退到系统默认程序），不会把文件卡住。"""
+    e = config.norm_ext(ext)
+    if e in CAD_EXT:
         return cad_reader_exe()
+    if e in config.VIDEO_EXT:
+        return geeplayer_exe()
     return ""
 
 
 def builtin_open_with() -> list:
-    """给设置界面显示用：内置默认程序现在认到哪个程序；没认到就返回空列表。"""
+    """给设置界面显示用：内置默认程序认到了哪几个（没认到就返回空列表）。"""
+    out = []
     exe = cad_reader_exe()
-    if not exe:
-        return []
-    return [{"ext": ".dwg", "exts": list(CAD_EXT),
-             "name": friendly_name(exe) or "CAD 快速看图", "exe": exe}]
+    if exe:
+        out.append({"ext": ".dwg", "exts": list(CAD_EXT),
+                    "name": friendly_name(exe) or "CAD 快速看图", "exe": exe})
+    gp = geeplayer_exe()
+    if gp:
+        out.append({"ext": ".mp4", "exts": list(VIDEO_EXT_ORDER),
+                    "name": friendly_name(gp) or "爱奇艺万能播放器", "exe": gp})
+    return out
 
 
 def program_for(path: str) -> str:
