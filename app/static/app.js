@@ -251,10 +251,23 @@ function renderRoots() {
   const rs = (S.st && S.st.roots) || [];
   const norm = p => (p || "").replace(/[\\/]+$/, "").toLowerCase();
   const cur = norm(S.loaded);
-  box.innerHTML = rs.map(r =>
-    `<div class="root${cur && norm(r.path) === cur ? " on" : ""}" data-root="${esc(r.path)}" title="${esc(r.path)}\n点一下 = 加载这个根目录">`
-    + `<span>${esc(r.path)}</span><button data-rm="${esc(r.path)}" title="从素材库移除">×</button></div>`).join("")
-    || `<div class="dim" style="font-size:12px">还没有素材目录</div>`;
+  if (!rs.length) { box.innerHTML = `<div class="dim" style="font-size:12px">还没有素材目录</div>`; return; }
+  const BS = String.fromCharCode(92);   // 反斜杠
+  // 这个根目录是不是别的根目录的子目录？是的话缩进、淡化，看得出一层套一层
+  const isChild = p => rs.some(r => { const a = norm(p), b = norm(r.path); return a !== b && a.indexOf(b + BS) === 0; });
+  // 当前加载的排最前；根目录太多时先只显示前几个，其余折叠起来，别把左栏撑乱
+  const list = rs.slice().sort((a, b) => (norm(a.path) === cur ? 0 : 1) - (norm(b.path) === cur ? 0 : 1));
+  const LIMIT = 5;
+  const showAll = !!S.rootsExpanded || list.length <= LIMIT;
+  const shown = showAll ? list : list.slice(0, LIMIT);
+  box.innerHTML = shown.map(r => {
+    const on = cur && norm(r.path) === cur;
+    return `<div class="root${on ? " on" : ""}${isChild(r.path) ? " sub" : ""}" data-root="${esc(r.path)}" title="${esc(r.path)}\n点一下 = 加载这个根目录">`
+      + `<span>${esc(r.path)}</span><button data-rm="${esc(r.path)}" title="从素材库移除">×</button></div>`;
+  }).join("");
+  const rest = list.length - shown.length;
+  if (rest > 0) box.insertAdjacentHTML("beforeend", `<button class="rootsMore" data-more="1">还有 ${rest} 个根目录，展开…</button>`);
+  else if (list.length > LIMIT) box.insertAdjacentHTML("beforeend", `<button class="rootsMore" data-more="0">收起</button>`);
   $$("#roots .root").forEach(el => el.onclick = () => loadFolder(el.dataset.root));
   $$("#roots button[data-rm]").forEach(b => b.onclick = async e => {
     e.stopPropagation();
@@ -263,6 +276,8 @@ function renderRoots() {
     await api("/api/roots", { action: "remove", path: b.dataset.rm });
     loadState(); loadKinds(); loadFacets();
   });
+  const more = $("#roots .rootsMore");
+  if (more) more.onclick = e => { e.stopPropagation(); S.rootsExpanded = more.dataset.more === "1"; renderRoots(); };
 }
 
 async function loadKinds() {
@@ -638,7 +653,10 @@ async function browse(path) {
     d = await api("/api/browse?path=" + encodeURIComponent(path || "") + "&hidden=" + S.showHidden);
   } catch (e) { toast("打开目录失败：" + e.message, "err"); if (old) $("#pathInput").value = old; return; }
   if (d.error) { toast("打不开：" + d.error, "err"); return; }
-  if (old && d.path !== old) S.dirFilter = "";
+  if (old && d.path !== old) {
+    S.dirFilter = "";                                  // 换了文件夹，类型筛选不再适用
+    if (S.q.trim()) { S.q = ""; $("#q").value = ""; }   // 换文件夹就丢掉筛选词，否则「上一级后文件夹都不见了」
+  }
   S.dir = d.path; S.dirData = d;
   if (S.loaded && S.mode === "lib") S.loaded = d.path;
   $("#pathInput").value = d.path;
@@ -668,16 +686,20 @@ function renderBrowse() {
   const dirs = (d.dirs || []).map(e => fileItem(Object.assign({}, e, { is_dir: true })));
   const files = (d.files || []).map(fileItem);
   const q = S.q.trim().toLowerCase();
-  const flt = o => (!q || o.name.toLowerCase().includes(q)) && (!S.dirFilter || o.kind === S.dirFilter);
-  S.dirItems = sortDirItems(dirs.filter(flt)).concat(sortDirItems(files.filter(flt)));
+  const nameHit = o => !q || o.name.toLowerCase().includes(q);
+  // 类型筛选只管文件：文件夹永远显示，不然筛一下文件夹全没了、一层层点不下去
+  const fileHit = o => nameHit(o) && (!S.dirFilter || o.kind === S.dirFilter);
+  S.dirItems = sortDirItems(dirs.filter(nameHit)).concat(sortDirItems(files.filter(fileHit)));
   S.dirItems.forEach(i => S.map[i.key] = i);
   $("#grid").innerHTML = S.dirItems.map(cardHtml).join("");
   bindCards();
   $("#crumb").textContent = d.path;
   const n = S.dirItems.length;
-  if (!n) emptyState("这个文件夹是空的", "或者被筛选条件过滤掉了");
-  else emptyState("", "");
-  $("#empty").classList.add("hidden");
+  const raw = (d.dirs || []).length + (d.files || []).length;
+  if (!n) {
+    if (raw) emptyState(`这 ${raw} 项都被筛选条件挡住了`, "清掉搜索框里的字、或点左侧「全部文件」就能看见");
+    else emptyState("这个文件夹是空的", "");
+  } else emptyState("", "");
   $("#selCount").textContent = S.sel.size;
 }
 // 左侧「类型 / 分类」什么时候跟着走：浏览模式，或者素材库里加载了文件夹
@@ -709,7 +731,7 @@ function renderSearch() {
   S.sel.clear(); S.map = {};
   const dirs = (d.items || []).filter(e => e.is_dir).map(fileItem);
   const files = (d.items || []).filter(e => !e.is_dir).map(fileItem);
-  const flt = o => !S.dirFilter || o.kind === S.dirFilter;
+  const flt = o => o.is_dir || !S.dirFilter || o.kind === S.dirFilter;
   S.dirItems = sortDirItems(dirs.filter(flt)).concat(sortDirItems(files.filter(flt)));
   S.dirItems.forEach(i => S.map[i.key] = i);
   $("#grid").innerHTML = S.dirItems.map(cardHtml).join("");
