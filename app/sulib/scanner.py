@@ -11,7 +11,7 @@ import os
 import re
 import time
 
-from . import archives, config, db, textutil
+from . import archives, config, db, textutil, thumbs
 
 SKIP_DIRS = {"$recycle.bin", "system volume information", "config.msi",
              "wpsystem", "windowsapps", "deliveryoptimization", "wudownloadcache"}
@@ -37,10 +37,13 @@ class Scanner:
                       "others": 0, "nested": 0, "errors": 0, "repaired": 0}
         self.rows = []
         self.errors = []
+        # 「图片只收录这些文件夹」——空列表 = 所有图片都收录
+        self.scope = config.image_scope()
 
     def run(self, roots):
         t0 = time.time()
         cfg = config.load()
+        self.scope = config.image_scope()
         if int(cfg.get("scan_rev") or 0) != SCAN_REV:
             self.force = True
         for root in roots:
@@ -51,6 +54,7 @@ class Scanner:
                 self.errors.append(f"根目录不存在：{root}")
         self._flush(force=True)
         self._prune_missing([r for r in roots if os.path.isdir(r)])
+        self._prune_image_scope()
         self._pair_renders()
         self._mark_cached_thumbs()
         self._skip_image_thumbs()
@@ -167,6 +171,9 @@ class Scanner:
             self._archive(e.path, top, size, mtime, depth=0, origin="", container=e.path)
         elif config.get("index_all_files", True):
             kind = config.kind_of(e.name)
+            # 图片只管「图片收录范围」里的：范围外的直接跳过（原图一个都不动）
+            if kind in ("image", "psd") and not config.path_in_scope(e.path, self.scope):
+                return
             cap = int(config.get("max_file_mb", 2048)) * 1024 * 1024
             if size > cap:
                 return
@@ -214,6 +221,9 @@ class Scanner:
             elif ext_is_image(iext):
                 if not cfg.get("index_images", True):
                     continue
+                # 压缩包里的图片：看这个压缩包（或它的上级压缩包）本身在不在范围内
+                if not config.path_in_scope(container or path, self.scope):
+                    continue
                 if any(d.strip().lower() in textutil.TEXTURE_DIRS for d in dirs):
                     continue
                 if isize > int(cfg.get("image_max_mb", 30)) * 1024 * 1024 or isize <= 0:
@@ -232,6 +242,38 @@ class Scanner:
                           size=isize, mtime=mtime, top=top, container=container)
         if nested_files and depth < 1:
             self._nested(path, label, top, nested_files, depth, container)
+
+    def _prune_image_scope(self) -> int:
+        """把「图片收录范围」之外的老图片从索引里请出去，顺手删掉它们的缩略图。
+
+        只动索引和缓存，硬盘上的原图一个都不碰。扫描素材库时会自动跑一遍。
+        """
+        if not self.scope:
+            return 0
+        rows = db.q("SELECT id,kind,source_path,inner_path,mtime,size,render_id "
+                    "FROM assets WHERE kind IN ('image','psd')")
+        drop = [r for r in rows if not config.path_in_scope(r["source_path"], self.scope)]
+        if not drop:
+            return 0
+        freed = 0
+        for r in drop:
+            try:
+                p = thumbs.path_for(dict(r))
+            except Exception:
+                continue
+            if p and os.path.isfile(p):
+                try:
+                    freed += os.path.getsize(p)
+                    os.remove(p)
+                except OSError:
+                    pass
+        ids = [int(r["id"]) for r in drop]
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            db.ex("DELETE FROM assets WHERE id IN (%s)" % ",".join("?" * len(chunk)), tuple(chunk))
+        self.stats["purged_images"] = len(ids)
+        self.stats["purged_image_mb"] = round(freed / 1048576.0, 1)
+        return len(ids)
 
     def _nested(self, path, label, top, nested_files, depth, container):
         for inner, iname, isize in nested_files:

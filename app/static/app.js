@@ -1603,6 +1603,17 @@ async function openSettings() {
           <label class="chk"><input type="checkbox" id="setInArc" ${s.index_inside_archives ? "checked" : ""}> 索引压缩包内部文件</label>
           <label class="chk"><input type="checkbox" id="setImgOn" ${s.index_images ? "checked" : ""}> 索引压缩包内图片</label></div>
       </div>
+      <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">图片只收录这些文件夹</h4>
+      <div class="hint" style="margin:0 0 8px">
+        留空 = 所有图片都收录。<b>只收录下面列出的文件夹（含子文件夹）里的图片</b>：
+        范围外的图片不进索引、不生成缩略图、列表里也看不到。
+        <b>硬盘上的原图一个都不会删</b>，只是不做索引。</div>
+      <div class="roots" id="imgScopeList"></div>
+      <div class="dacts" style="margin:6px 0 6px">
+        <button class="btn" id="imgScopeAdd">+ 添加文件夹…</button>
+        <button class="btn ghost" id="imgScopeClear">清空（所有图片都收录）</button>
+      </div>
+      <div class="hint" id="imgScopeTip" style="margin:0 0 14px"></div>
       <h4 style="font-size:11px;color:var(--dim);letter-spacing:.08em;margin:18px 0 8px">列表卡片显示</h4>
       <label class="chk"><input type="checkbox" id="setThumbs" ${s.show_thumbs === false ? "" : "checked"}>
         显示缩略图（总开关）</label>
@@ -1760,6 +1771,30 @@ async function openSettings() {
   $("#openData").onclick = () => api("/api/open-folder", { path: st.data_dir });
   $("#openThumb").onclick = () => api("/api/open-folder", { path: st.thumb_dir });
   $("#rebuild").onclick = () => { closeModal(); $("#btnScan").click(); };
+  /* ---- 图片收录范围：先攒在内存里，点「保存设置」才落盘 ---- */
+  let imgScope = (Array.isArray(s.image_scope) ? s.image_scope : []).slice();
+  const drawImgScope = () => {
+    $("#imgScopeList").innerHTML = imgScope.length
+      ? imgScope.map((p, i) => `<div class="root"><span title="${esc(p)}">${esc(p)}</span>`
+          + `<button data-rmimg="${i}" title="移除">×</button></div>`).join("")
+      : `<div class="dim" style="font-size:12px;padding:2px 4px">（没限制：所有图片都收录）</div>`;
+    $$("#imgScopeList [data-rmimg]").forEach(b => b.onclick = () => {
+      imgScope.splice(+b.dataset.rmimg, 1); drawImgScope();
+    });
+    const changed = JSON.stringify(imgScope) !== JSON.stringify(Array.isArray(s.image_scope) ? s.image_scope : []);
+    $("#imgScopeTip").innerHTML = imgScope.length
+      ? `当前只收录这 ${imgScope.length} 个文件夹里的图片，其他图片列表里看不到。`
+        + (changed ? " <b>改完记得点右下角「保存设置」，再点「维护 → 重新扫描全部素材」把旧索引清干净。</b>" : "")
+      : `当前所有图片都收录。` + (changed ? " <b>点「保存设置」生效。</b>" : "");
+  };
+  drawImgScope();
+  $("#imgScopeAdd").onclick = async () => {
+    const p = await pickFolder("选择要收录图片的文件夹");
+    if (!p) return;
+    if (!imgScope.some(x => String(x).toLowerCase() === p.toLowerCase())) imgScope.push(p);
+    drawImgScope();
+  };
+  $("#imgScopeClear").onclick = () => { imgScope = []; drawImgScope(); };
   $("#setSave").onclick = async () => {
     await api("/api/settings", {
       seven_zip: $("#set7z").value.trim(), ffmpeg: $("#setFF").value.trim(),
@@ -1776,6 +1811,7 @@ async function openSettings() {
       close_action: (document.querySelector('input[name="closeAct"]:checked') || {}).value || "tray",
       show_thumbs: $("#setThumbs").checked,
       show_path: $("#setShowPath").checked,
+      image_scope: imgScope,
       open_with: ow,
     });
     if ($("#setRemind").checked && s.cache_remind_on === false) localStorage.removeItem("xc_cache_remind_at");
@@ -1785,10 +1821,13 @@ async function openSettings() {
                     || ($("#setImgOn").checked !== !!s.index_images);
     const showChanged = ($("#setThumbs").checked !== (s.show_thumbs !== false))
                      || ($("#setShowPath").checked !== !!s.show_path);
+    const imgScopeChanged = JSON.stringify(imgScope) !== JSON.stringify(Array.isArray(s.image_scope) ? s.image_scope : []);
     toast("设置已保存" + (idxChanged ? "，索引选项改动要重新扫描才生效" : "")
-      + (showChanged ? "；卡片显示方式已更新" : ""), "ok");
+      + (showChanged ? "；卡片显示方式已更新" : "")
+      + (imgScopeChanged ? "；图片收录范围已更新，建议点「维护 → 重新扫描全部素材」清掉旧索引" : ""), "ok");
     await loadState();
     if (showChanged) redrawCards();
+    if (imgScopeChanged) reload();
   };
   $$("#modalBox [data-undo]").forEach(b => b.onclick = async () => {
     if (!confirm("撤销这批重命名？")) return;

@@ -32,6 +32,51 @@ app = FastAPI(title=config.APP_NAME, docs_url=None, redoc_url=None)
 FOLDER_EXPR = "COALESCE(NULLIF(folder,''), NULLIF(category,''), '')"
 
 
+# 「图片只收录这些文件夹」：范围外的图片不算数（索引里没有、列表里也没有）。
+def img_scope_where(col: str = "source_path"):
+    """返回 (SQL 条件, 参数)。条件含义：不是图片，或者这条图片落在收录范围里。
+
+    用 substr 做「目录 + 分隔符」的精确前缀匹配，不碰 LIKE 的通配符，
+    路径里带 % 或 _ 也不会误伤。
+    没设范围（空列表）时返回空串，调用方原样跳过。
+    """
+    scope = config.image_scope()
+    conds, args = [], []
+    for d in scope:
+        d = str(d).rstrip("\\/")
+        if not d:
+            continue
+        pre = d + os.sep
+        conds.append("substr(%s, 1, ?) = ? COLLATE NOCASE" % col)
+        args += [len(pre), pre]
+    if not conds:
+        return "", []
+    return "(kind NOT IN ('image','psd') OR %s)" % " OR ".join(conds), args
+
+
+def _kind_counts() -> dict:
+    sc, sa = img_scope_where()
+    if not sc:
+        return {r["kind"]: r["c"] for r in db.q("SELECT kind, COUNT(*) c FROM assets GROUP BY kind")}
+    return {r["kind"]: r["c"] for r in
+            db.q("SELECT kind, COUNT(*) c FROM assets WHERE %s GROUP BY kind" % sc, tuple(sa))}
+
+
+def _count_scoped(cond: str) -> int:
+    """带「图片收录范围」的计数。"""
+    sc, sa = img_scope_where()
+    if not sc:
+        return db.count("SELECT COUNT(*) FROM assets WHERE %s" % cond)
+    return db.count("SELECT COUNT(*) FROM assets WHERE %s AND %s" % (cond, sc), tuple(sa))
+
+
+def _assets_total() -> int:
+    sc, sa = img_scope_where()
+    if not sc:
+        return db.count("SELECT COUNT(*) FROM assets")
+    return db.count("SELECT COUNT(*) FROM assets WHERE %s" % sc, tuple(sa))
+
+
 # ------------------------------------------------------------------ 基础
 def _row(r):
     return {k: r[k] for k in r.keys()}
@@ -89,20 +134,20 @@ def index():
 @app.get("/api/state")
 def api_state():
     cfg = config.load()
-    counts = {r["kind"]: r["c"] for r in db.q("SELECT kind, COUNT(*) c FROM assets GROUP BY kind")}
+    counts = _kind_counts()
     return {
         "app": config.APP_NAME,
         "sub": config.APP_SUB,
         "version": config.APP_VERSION,
         "roots": [{"path": p, "enabled": 1} for p in all_roots()],
         "counts": counts,
-        "total": db.count("SELECT COUNT(*) FROM assets"),
+        "total": _assets_total(),
         "models": counts.get("model", 0),
         "images": counts.get("image", 0) + counts.get("psd", 0),
         "archives": db.count("SELECT COUNT(*) FROM archive_meta"),
         "favorites": db.count("SELECT COUNT(*) FROM assets WHERE favorite=1"),
-        "thumbs_ready": db.count("SELECT COUNT(*) FROM assets WHERE thumb_status='ok'"),
-        "thumbs_pending": db.count("SELECT COUNT(*) FROM assets WHERE thumb_status='pending'"),
+        "thumbs_ready": _count_scoped("thumb_status='ok'"),
+        "thumbs_pending": _count_scoped("thumb_status='pending'"),
         "thumb_dir": str(config.THUMB_DIR),
         "data_dir": str(config.DATA_DIR),
         "seven_zip": cfg.get("seven_zip") or "",
@@ -123,7 +168,7 @@ def api_state():
                                             "cache_remind_once", "cache_remind_min",
                                             "cache_limit_mb", "close_action",
                                             "image_thumbs", "show_thumbs", "show_path",
-                                            "loaded_root")},
+                                            "loaded_root", "image_scope")},
         "disk_free": ops.disk_free(str(config.DATA_DIR)),
         "scanning": STATE["scanning"],
         "scanning_stats": STATE["last_stats"],
@@ -133,7 +178,7 @@ def api_state():
 
 @app.get("/api/kinds")
 def api_kinds():
-    counts = {r["kind"]: r["c"] for r in db.q("SELECT kind, COUNT(*) c FROM assets GROUP BY kind")}
+    counts = _kind_counts()
     items = [{"key": k, "label": config.KIND_LABEL.get(k, k),
               "color": config.KIND_COLOR.get(k, "#6b7280"),
               "count": counts.get(k, 0), "present": 1 if counts.get(k) else 0}
@@ -141,7 +186,7 @@ def api_kinds():
     extra = [{"key": k, "label": config.KIND_LABEL.get(k, k),
               "color": config.KIND_COLOR.get(k, "#6b7280"), "count": c, "present": 1}
              for k, c in counts.items() if k not in config.KIND_ORDER]
-    return {"kinds": items + extra, "total": db.count("SELECT COUNT(*) FROM assets")}
+    return {"kinds": items + extra, "total": _assets_total()}
 
 
 @app.get("/api/facets")
@@ -157,6 +202,10 @@ def api_facets(kind: str = "", category: str = "", style: str = "", q: str = "",
     # 这样点开 3D模型（或效果图、图纸）之后，能把这一大堆按所在文件夹拆开
     fx = FOLDER_EXPR
     where, args = [f"{fx} <> ''"], []
+    _sc, _sa = img_scope_where()
+    if _sc:
+        where.append(_sc)
+        args += _sa
     if kind == "fav" or fav:
         where.append("favorite = 1")
     elif kind and kind != "all":
@@ -194,6 +243,10 @@ def api_assets(q: str = "", kind: str = "", category: str = "", style: str = "",
                source: str = "", sort: str = "category",
                offset: int = 0, limit: int = Query(80, le=500)):
     where, args = ["1=1"], []
+    _sc, _sa = img_scope_where()
+    if _sc:
+        where.append(_sc)
+        args += _sa
     if q.strip():
         like = f"%{q.strip()}%"
         where.append("(name LIKE ? OR orig_name LIKE ? OR folder LIKE ? OR category LIKE ? "
@@ -424,6 +477,11 @@ def _run_prefetch(jid, kind="", ids=()):
     try:
         args = []
         where = []
+        _sc, _sa = img_scope_where()
+        if _sc:
+            # 「图片只收录这些文件夹」：范围外的图片不用花时间生成缩略图
+            where.append(_sc)
+            args += _sa
         if ids:
             where.append("id IN (%s)" % ",".join("?" * len(ids)))
             args += list(ids)
@@ -756,6 +814,23 @@ def api_settings(payload: dict = Body(...)):
         else:
             db.ex("UPDATE assets SET thumb_status='skip', thumb_msg='按设置不生成图片缩略图' "
                   "WHERE kind='image' AND thumb_status<>'ok'")
+    # 图片只收录这些文件夹（空列表 = 所有图片都收录）
+    if "image_scope" in payload:
+        v = payload["image_scope"]
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, (list, tuple)):
+            v = []
+        out, seen = [], set()
+        for x in v:
+            t = str(x or "").strip().strip('"')
+            k = os.path.normcase(os.path.abspath(t)) if t else ""
+            if t and k not in seen:
+                seen.add(k)
+                out.append(t)
+            if len(out) >= 50:
+                break
+        cfg["image_scope"] = out
     # 上次加载的根目录（下次打开程序自动回到这里；空字符串 = 不自动加载）
     if "loaded_root" in payload:
         v = payload["loaded_root"]

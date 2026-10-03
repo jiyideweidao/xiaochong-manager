@@ -8,7 +8,7 @@ from pathlib import Path
 APP_NAME = "小虫管理器"
 APP_SUB = "本地资源管理器 · 素材库"
 APP_EN = "XiaoChongManager"
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.2.10"
 
 # ----------------------------------------------------------------- 路径
 def _app_dir() -> Path:
@@ -229,6 +229,10 @@ DEFAULTS = {
     #   show_path   = 卡片上写「真实文件名 + 所在文件夹的完整路径」（方便在硬盘里找）
     "show_thumbs": True,
     "show_path": False,
+    # 图片只收录这些文件夹（空列表 = 所有图片都收录）。
+    # 列表里每个目录「自己 + 所有子文件夹」里的图片才进素材库；
+    # 范围外的图片不进索引、不生成缩略图、列表里也看不到。原图一个都不会删。
+    "image_scope": [],
 }
 
 
@@ -282,3 +286,37 @@ def save(cfg: dict) -> dict:
 
 def get(key, default=None):
     return load().get(key, DEFAULTS.get(key, default))
+
+
+def image_scope() -> list:
+    """图片收录范围：只收录这些文件夹里的图片。空列表 = 不限制。"""
+    v = get("image_scope")
+    if isinstance(v, str):
+        v = [v]
+    if not isinstance(v, (list, tuple)):
+        return []
+    out, seen = [], set()
+    for x in v:
+        t = str(x or "").strip().strip('"')
+        if not t:
+            continue
+        k = os.path.normcase(os.path.abspath(t))
+        if k not in seen:
+            seen.add(k)
+            out.append(t)
+    return out
+
+
+def path_in_scope(path, scope=None) -> bool:
+    """path 在不在「图片收录范围」里（含子文件夹）。scope 为空 = 一律算在内。"""
+    scope = image_scope() if scope is None else scope
+    if not scope:
+        return True
+    p = os.path.normcase(os.path.abspath(str(path or "")))
+    if not p:
+        return False
+    for d in scope:
+        d = os.path.normcase(os.path.abspath(str(d))).rstrip("\\/")
+        if p == d or p.startswith(d + os.sep):
+            return True
+    return False
